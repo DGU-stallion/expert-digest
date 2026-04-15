@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "expert-digest"
+version = "0.1.0"
+description = "Expert content knowledge distillation MVP."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "ExpertDigest Contributors" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.8"
+]
+
+[project.scripts]
+expert-digest = "expert_digest.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/expert_digest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

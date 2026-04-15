@@ -1,0 +1,9 @@
+project:
+  name: ExpertDigest
+  environment: local
+
+paths:
+  raw_data: data/raw
+  processed_data: data/processed
+  vector_store: data/vector_store
+  outputs: data/outputs
