@@ -9,6 +9,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from expert_digest import __version__
+from expert_digest.generation.handbook_writer import (
+    DeterministicThemeSynthesizer,
+    HybridThemeSynthesizer,
+    build_handbook,
+    write_handbook,
+)
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
@@ -199,6 +205,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         _emit_structured_answer(result, output_format=args.format)
         return 0
 
+    if args.command == "generate-handbook":
+        synthesizer = (
+            HybridThemeSynthesizer()
+            if args.synthesis_mode == "hybrid"
+            else DeterministicThemeSynthesizer()
+        )
+        try:
+            handbook = build_handbook(
+                db_path=args.db,
+                author=args.author,
+                model=args.model,
+                top_k=args.top_k,
+                max_themes=args.max_themes,
+                synthesizer=synthesizer,
+            )
+            output_path = write_handbook(handbook=handbook, output_path=args.output)
+        except ValueError as error:
+            print(f"Failed to generate handbook: {error}")
+            return 1
+        print(
+            f"Generated handbook for {handbook.author}: {output_path} "
+            f"(sources={len(handbook.source_document_ids)}, "
+            f"mode={args.synthesis_mode})"
+        )
+        return 0
+
     parser.print_help()
     return 0
 
@@ -262,6 +294,23 @@ def _build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("--min-avg-score", type=float, default=0.03)
     ask_parser.add_argument("--max-evidence", type=int, default=3)
     ask_parser.add_argument("--format", choices=["text", "json"], default="text")
+
+    handbook_parser = subparsers.add_parser("generate-handbook")
+    handbook_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    handbook_parser.add_argument("--author")
+    handbook_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
+    handbook_parser.add_argument("--top-k", type=int, default=3)
+    handbook_parser.add_argument("--max-themes", type=int, default=3)
+    handbook_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/outputs/handbook.md"),
+    )
+    handbook_parser.add_argument(
+        "--synthesis-mode",
+        choices=["deterministic", "hybrid"],
+        default="hybrid",
+    )
 
     return parser
 

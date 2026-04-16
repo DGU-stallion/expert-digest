@@ -1,7 +1,8 @@
 import json
+from pathlib import Path
 
 from expert_digest.cli import main
-from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
+from expert_digest.domain.models import Chunk, ChunkEmbedding, Document, Handbook
 from expert_digest.retrieval.retriever import ScoredChunk
 from expert_digest.storage.sqlite_store import (
     list_chunk_embeddings,
@@ -406,3 +407,60 @@ def test_cli_ask_refuses_when_average_score_below_threshold(monkeypatch, capsys)
 
     assert exit_code == 0
     assert payload["refused"] is True
+
+
+def test_cli_generate_handbook_writes_output(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+    output_path = Path("data/outputs/test_cli_generate_handbook.md")
+    handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册\n\n## 专家内容总览\n",
+        source_document_ids=["doc-1", "doc-2"],
+    )
+
+    def _fake_build_handbook(**kwargs):
+        captured.update(kwargs)
+        return handbook
+
+    def _fake_write_handbook(*, handbook: Handbook, output_path: str | Path) -> Path:
+        return Path(output_path)
+
+    monkeypatch.setattr("expert_digest.cli.build_handbook", _fake_build_handbook)
+    monkeypatch.setattr("expert_digest.cli.write_handbook", _fake_write_handbook)
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--author",
+            "黄彦臻",
+            "--top-k",
+            "4",
+            "--max-themes",
+            "2",
+            "--output",
+            str(output_path),
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert captured["author"] == "黄彦臻"
+    assert captured["top_k"] == 4
+    assert captured["max_themes"] == 2
+    assert "Generated handbook" in output
+
+
+def test_cli_generate_handbook_returns_error_on_generation_failure(
+    monkeypatch, capsys
+):
+    def _raise_error(**_kwargs):
+        raise ValueError("no documents available for handbook generation")
+
+    monkeypatch.setattr("expert_digest.cli.build_handbook", _raise_error)
+
+    exit_code = main(["generate-handbook"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Failed to generate handbook" in output
