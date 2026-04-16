@@ -230,7 +230,10 @@ def test_cli_ask_returns_structured_answer_with_evidence(monkeypatch, capsys):
         lambda *_a, **_k: [embedding],
     )
     monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
-    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr(
+        "expert_digest.cli.list_documents",
+        lambda *_a, **_k: [document],
+    )
     monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
     monkeypatch.setattr(
         "expert_digest.cli.rank_chunk_embeddings",
@@ -271,7 +274,10 @@ def test_cli_ask_refuses_when_retrieval_score_below_threshold(monkeypatch, capsy
         lambda *_a, **_k: [embedding],
     )
     monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
-    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr(
+        "expert_digest.cli.list_documents",
+        lambda *_a, **_k: [document],
+    )
     monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
     monkeypatch.setattr(
         "expert_digest.cli.rank_chunk_embeddings",
@@ -308,7 +314,10 @@ def test_cli_ask_supports_json_output(monkeypatch, capsys):
         lambda *_a, **_k: [embedding],
     )
     monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
-    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr(
+        "expert_digest.cli.list_documents",
+        lambda *_a, **_k: [document],
+    )
     monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
     monkeypatch.setattr(
         "expert_digest.cli.rank_chunk_embeddings",
@@ -464,3 +473,53 @@ def test_cli_generate_handbook_returns_error_on_generation_failure(
 
     assert exit_code == 1
     assert "Failed to generate handbook" in output
+
+
+def test_cli_generate_handbook_hybrid_uses_default_llm_client(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+    fake_llm_client = object()
+    handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册\n",
+        source_document_ids=["doc-1"],
+    )
+
+    def _fake_create_default_llm_client(**kwargs):
+        captured.update(kwargs)
+        return fake_llm_client
+
+    def _fake_build_handbook(**kwargs):
+        synthesizer = kwargs["synthesizer"]
+        assert synthesizer._llm_client is fake_llm_client
+        return handbook
+
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        _fake_create_default_llm_client,
+    )
+    monkeypatch.setattr("expert_digest.cli.build_handbook", _fake_build_handbook)
+    monkeypatch.setattr(
+        "expert_digest.cli.write_handbook",
+        lambda *, handbook, output_path: Path(output_path),
+    )
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--synthesis-mode",
+            "hybrid",
+            "--ccswitch-db",
+            "data/processed/mock_ccswitch.sqlite3",
+            "--llm-timeout",
+            "12",
+            "--llm-max-tokens",
+            "600",
+        ]
+    )
+    _ = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert captured["ccswitch_db_path"] == Path("data/processed/mock_ccswitch.sqlite3")
+    assert captured["timeout_seconds"] == 12
+    assert captured["max_output_tokens"] == 600

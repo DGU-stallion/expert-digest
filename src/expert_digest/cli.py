@@ -15,6 +15,10 @@ from expert_digest.generation.handbook_writer import (
     build_handbook,
     write_handbook,
 )
+from expert_digest.generation.llm_client import (
+    DEFAULT_CCSWITCH_DB_PATH,
+    create_default_handbook_llm_client,
+)
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
@@ -27,7 +31,10 @@ from expert_digest.processing.embedder import (
 )
 from expert_digest.processing.splitter import split_documents
 from expert_digest.rag.answering import StructuredAnswer, build_structured_answer
-from expert_digest.retrieval.retriever import hydrate_scored_chunks, rank_chunk_embeddings
+from expert_digest.retrieval.retriever import (
+    hydrate_scored_chunks,
+    rank_chunk_embeddings,
+)
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
     clear_chunk_embeddings,
@@ -206,11 +213,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-handbook":
-        synthesizer = (
-            HybridThemeSynthesizer()
-            if args.synthesis_mode == "hybrid"
-            else DeterministicThemeSynthesizer()
-        )
+        llm_enabled = False
+        if args.synthesis_mode == "hybrid":
+            llm_client = create_default_handbook_llm_client(
+                ccswitch_db_path=args.ccswitch_db,
+                timeout_seconds=args.llm_timeout,
+                max_output_tokens=args.llm_max_tokens,
+            )
+            llm_enabled = llm_client is not None
+            synthesizer = HybridThemeSynthesizer(llm_client=llm_client)
+        else:
+            synthesizer = DeterministicThemeSynthesizer()
         try:
             handbook = build_handbook(
                 db_path=args.db,
@@ -227,7 +240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"Generated handbook for {handbook.author}: {output_path} "
             f"(sources={len(handbook.source_document_ids)}, "
-            f"mode={args.synthesis_mode})"
+            f"mode={args.synthesis_mode}, llm_enabled={llm_enabled})"
         )
         return 0
 
@@ -311,6 +324,13 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["deterministic", "hybrid"],
         default="hybrid",
     )
+    handbook_parser.add_argument(
+        "--ccswitch-db",
+        type=Path,
+        default=DEFAULT_CCSWITCH_DB_PATH,
+    )
+    handbook_parser.add_argument("--llm-timeout", type=int, default=30)
+    handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
 
     return parser
 
