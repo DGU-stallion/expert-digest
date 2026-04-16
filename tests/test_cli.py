@@ -575,9 +575,51 @@ def test_cli_generate_handbook_json_output_includes_llm_metadata(
     assert payload["llm_provider"] == "nvidia"
     assert payload["llm_model"] == "stepfun-ai/step-3.5-flash"
     assert payload["llm_base_url"] == "https://integrate.api.nvidia.com"
+    assert payload["latency_ms"] >= 0
+    assert payload["fallback_used"] is False
+    assert payload["error_reason"] is None
 
 
 def test_cli_generate_handbook_json_output_handles_no_llm(monkeypatch, capsys):
+    handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册\n",
+        source_document_ids=["doc-1"],
+    )
+
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr("expert_digest.cli.build_handbook", lambda **_kwargs: handbook)
+    monkeypatch.setattr(
+        "expert_digest.cli.write_handbook",
+        lambda *, handbook, output_path: Path(output_path),
+    )
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--synthesis-mode",
+            "hybrid",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["llm_enabled"] is False
+    assert payload["llm_provider"] is None
+    assert payload["llm_model"] is None
+    assert payload["llm_base_url"] is None
+    assert payload["fallback_used"] is True
+    assert payload["error_reason"] == "llm_client_unavailable"
+
+
+def test_cli_generate_handbook_can_save_run_metadata(monkeypatch, capsys):
+    captured: dict[str, object] = {}
     handbook = Handbook(
         author="黄彦臻",
         title="黄彦臻学习手册",
@@ -591,6 +633,12 @@ def test_cli_generate_handbook_json_output_handles_no_llm(monkeypatch, capsys):
         lambda *, handbook, output_path: Path(output_path),
     )
 
+    def _fake_save_run_metadata(*, payload, output_path):
+        captured["payload"] = payload
+        captured["output_path"] = output_path
+
+    monkeypatch.setattr("expert_digest.cli._save_run_metadata", _fake_save_run_metadata)
+
     exit_code = main(
         [
             "generate-handbook",
@@ -598,12 +646,12 @@ def test_cli_generate_handbook_json_output_handles_no_llm(monkeypatch, capsys):
             "deterministic",
             "--format",
             "json",
+            "--save-run-metadata",
+            "data/outputs/handbook_run_metadata.json",
         ]
     )
-    payload = json.loads(capsys.readouterr().out)
+    _ = capsys.readouterr().out
 
     assert exit_code == 0
-    assert payload["llm_enabled"] is False
-    assert payload["llm_provider"] is None
-    assert payload["llm_model"] is None
-    assert payload["llm_base_url"] is None
+    assert captured["output_path"] == Path("data/outputs/handbook_run_metadata.json")
+    assert captured["payload"]["synthesis_mode"] == "deterministic"

@@ -88,6 +88,12 @@ class DeterministicThemeSynthesizer:
             "结论仅基于当前检索片段，后续可接入 LLM 做风格化润色。"
         )
 
+    def runtime_metadata(self) -> dict[str, object]:
+        return {
+            "fallback_used": True,
+            "error_reason": "deterministic_mode",
+        }
+
 
 class HybridThemeSynthesizer:
     """LLM-first synthesizer with deterministic fallback."""
@@ -100,6 +106,9 @@ class HybridThemeSynthesizer:
     ) -> None:
         self._llm_client = llm_client
         self._fallback = fallback or DeterministicThemeSynthesizer()
+        self._llm_attempts = 0
+        self._llm_failures = 0
+        self._last_error_reason: str | None = None
 
     def summarize_theme(
         self,
@@ -109,6 +118,7 @@ class HybridThemeSynthesizer:
         evidence_chunks: list[RetrievedChunk],
     ) -> str:
         if self._llm_client is not None:
+            self._llm_attempts += 1
             system_prompt, user_prompt = build_theme_summary_prompts(
                 theme_name=theme_name,
                 question=question,
@@ -123,12 +133,29 @@ class HybridThemeSynthesizer:
                     return llm_output
             except Exception:
                 # Fail-closed: if llm invocation fails, keep deterministic behavior.
-                pass
+                self._llm_failures += 1
+                self._last_error_reason = "llm_generation_error"
         return self._fallback.summarize_theme(
             theme_name=theme_name,
             question=question,
             evidence_chunks=evidence_chunks,
         )
+
+    def runtime_metadata(self) -> dict[str, object]:
+        if self._llm_client is None:
+            return {
+                "fallback_used": True,
+                "error_reason": "llm_client_unavailable",
+            }
+        if self._llm_failures > 0:
+            return {
+                "fallback_used": True,
+                "error_reason": self._last_error_reason or "llm_generation_error",
+            }
+        return {
+            "fallback_used": False,
+            "error_reason": None,
+        }
 
 
 def build_handbook(
@@ -154,7 +181,9 @@ def build_handbook(
         raise ValueError("no documents available for handbook generation")
 
     document_ids = {document.id for document in documents}
-    chunks = [chunk for chunk in list_chunks(db_path) if chunk.document_id in document_ids]
+    chunks = [
+        chunk for chunk in list_chunks(db_path) if chunk.document_id in document_ids
+    ]
     chunks_by_id = {chunk.id: chunk for chunk in chunks}
     documents_by_id = {document.id: document for document in documents}
 
