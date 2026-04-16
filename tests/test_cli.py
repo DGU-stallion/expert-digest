@@ -282,3 +282,127 @@ def test_cli_ask_refuses_when_retrieval_score_below_threshold(monkeypatch, capsy
 
     assert exit_code == 0
     assert "无法基于当前知识库回答" in output
+
+
+def test_cli_ask_supports_json_output(monkeypatch, capsys):
+    document = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+        url="https://example.com/p1",
+    )
+    chunk = Chunk.create(
+        document_id=document.id,
+        text="泡泡玛特的核心在于IP运营与预期管理。",
+        chunk_index=0,
+    )
+    embedding = ChunkEmbedding.create(
+        chunk_id=chunk.id,
+        model="hash-bow-v1",
+        vector=[1.0, 0.0],
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: [embedding],
+    )
+    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
+    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
+    monkeypatch.setattr(
+        "expert_digest.cli.rank_chunk_embeddings",
+        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.99)],
+    )
+
+    exit_code = main(
+        [
+            "ask",
+            "泡泡玛特的核心能力是什么？",
+            "--top-k",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["refused"] is False
+    assert payload["evidence"][0]["chunk_id"] == chunk.id
+    assert payload["recommended_original"]
+
+
+def test_cli_ask_refuses_when_average_score_below_threshold(monkeypatch, capsys):
+    document_1 = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+    )
+    document_2 = Document.create(
+        author="黄彦臻",
+        title="渠道策略",
+        content="渠道效率会影响增长速度。",
+        source="sample",
+    )
+    chunk_1 = Chunk.create(
+        document_id=document_1.id,
+        text="泡泡玛特的核心在于IP运营与预期管理。",
+        chunk_index=0,
+    )
+    chunk_2 = Chunk.create(
+        document_id=document_2.id,
+        text="渠道效率会影响增长速度。",
+        chunk_index=0,
+    )
+    embeddings = [
+        ChunkEmbedding.create(
+            chunk_id=chunk_1.id,
+            model="hash-bow-v1",
+            vector=[1.0, 0.0],
+        ),
+        ChunkEmbedding.create(
+            chunk_id=chunk_2.id,
+            model="hash-bow-v1",
+            vector=[0.0, 1.0],
+        ),
+    ]
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: embeddings,
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunks",
+        lambda *_a, **_k: [chunk_1, chunk_2],
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_documents",
+        lambda *_a, **_k: [document_1, document_2],
+    )
+    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
+    monkeypatch.setattr(
+        "expert_digest.cli.rank_chunk_embeddings",
+        lambda **_k: [
+            ScoredChunk(chunk_id=chunk_1.id, score=0.95),
+            ScoredChunk(chunk_id=chunk_2.id, score=0.01),
+        ],
+    )
+
+    exit_code = main(
+        [
+            "ask",
+            "泡泡玛特的核心能力是什么？",
+            "--top-k",
+            "2",
+            "--min-top-score",
+            "0.8",
+            "--min-avg-score",
+            "0.6",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["refused"] is True

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 from expert_digest import __version__
@@ -157,9 +159,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "ask":
         chunk_embeddings = list_chunk_embeddings(args.db, model=args.model)
+        min_top_score = (
+            args.min_top_score if args.min_top_score is not None else args.min_score
+        )
         if not chunk_embeddings:
-            result = build_structured_answer(question=args.query, evidence_chunks=[])
-            _print_structured_answer(result)
+            result = build_structured_answer(
+                question=args.query,
+                evidence_chunks=[],
+                max_evidence=args.max_evidence,
+                min_top_score=min_top_score,
+                min_avg_score=args.min_avg_score,
+            )
+            _emit_structured_answer(result, output_format=args.format)
             return 0
 
         query_vector = embed_text(
@@ -178,14 +189,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             chunks_by_id=chunks,
             documents_by_id=documents,
         )
-        evidence_chunks = [
-            item for item in evidence_chunks if item.score >= args.min_score
-        ]
         result = build_structured_answer(
             question=args.query,
             evidence_chunks=evidence_chunks,
+            max_evidence=args.max_evidence,
+            min_top_score=min_top_score,
+            min_avg_score=args.min_avg_score,
         )
-        _print_structured_answer(result)
+        _emit_structured_answer(result, output_format=args.format)
         return 0
 
     parser.print_help()
@@ -247,8 +258,19 @@ def _build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
     ask_parser.add_argument("--top-k", type=int, default=3)
     ask_parser.add_argument("--min-score", type=float, default=0.05)
+    ask_parser.add_argument("--min-top-score", type=float, default=None)
+    ask_parser.add_argument("--min-avg-score", type=float, default=0.03)
+    ask_parser.add_argument("--max-evidence", type=int, default=3)
+    ask_parser.add_argument("--format", choices=["text", "json"], default="text")
 
     return parser
+
+
+def _emit_structured_answer(result: StructuredAnswer, *, output_format: str) -> None:
+    if output_format == "json":
+        print(json.dumps(asdict(result), ensure_ascii=False))
+        return
+    _print_structured_answer(result)
 
 
 def _print_structured_answer(result: StructuredAnswer) -> None:
