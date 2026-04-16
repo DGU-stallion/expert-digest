@@ -15,6 +15,17 @@ class ScoredChunk:
     score: float
 
 
+@dataclass(frozen=True)
+class RetrievedChunk:
+    chunk_id: str
+    score: float
+    document_id: str
+    title: str
+    author: str
+    text: str
+    url: str | None = None
+
+
 def cosine_similarity(first: list[float], second: list[float]) -> float:
     """Compute cosine similarity, returning 0.0 for zero-norm vectors."""
     if len(first) != len(second):
