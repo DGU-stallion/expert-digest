@@ -246,3 +246,39 @@ def test_cli_ask_returns_structured_answer_with_evidence(monkeypatch, capsys):
     assert "推荐原文:" in output
     assert "泡泡玛特复盘" in output
     assert "不确定性:" in output
+
+
+def test_cli_ask_refuses_when_retrieval_score_below_threshold(monkeypatch, capsys):
+    document = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+    )
+    chunk = Chunk.create(
+        document_id=document.id,
+        text="泡泡玛特的核心在于IP运营与预期管理。",
+        chunk_index=0,
+    )
+    embedding = ChunkEmbedding.create(
+        chunk_id=chunk.id,
+        model="hash-bow-v1",
+        vector=[1.0, 0.0],
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: [embedding],
+    )
+    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
+    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
+    monkeypatch.setattr(
+        "expert_digest.cli.rank_chunk_embeddings",
+        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.01)],
+    )
+
+    exit_code = main(["ask", "泡泡玛特的核心能力是什么？", "--top-k", "1"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "无法基于当前知识库回答" in output

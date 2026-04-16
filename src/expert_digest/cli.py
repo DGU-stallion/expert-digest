@@ -178,6 +178,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             chunks_by_id=chunks,
             documents_by_id=documents,
         )
+        evidence_chunks = [
+            item for item in evidence_chunks if item.score >= args.min_score
+        ]
         result = build_structured_answer(
             question=args.query,
             evidence_chunks=evidence_chunks,
@@ -243,6 +246,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     ask_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
     ask_parser.add_argument("--top-k", type=int, default=3)
+    ask_parser.add_argument("--min-score", type=float, default=0.05)
 
     return parser
 
