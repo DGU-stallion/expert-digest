@@ -12,6 +12,8 @@ env/
 .ruff_cache/
 .mypy_cache/
 .tmp/
+sandbox_check/
+sandbox_m2/
 .coverage
 htmlcov/
 
