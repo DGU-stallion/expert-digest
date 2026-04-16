@@ -14,6 +14,7 @@ env/
 .tmp/
 sandbox_check/
 sandbox_m2/
+sandbox_m3/
 .coverage
 htmlcov/
 

@@ -1,12 +1,15 @@
 import sqlite3
 
-from expert_digest.domain.models import Chunk, Document
+from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
+    clear_chunk_embeddings,
     clear_chunks,
     get_documents_by_author,
+    list_chunk_embeddings,
     list_chunks_for_document,
     list_documents,
+    save_chunk_embeddings,
     save_chunks,
     save_documents,
 )
@@ -93,3 +96,27 @@ def test_clear_chunks_removes_existing_rows(tmp_path):
 
     assert cleared == 2
     assert list_chunks_for_document(db_path, document.id) == []
+
+
+def test_save_and_clear_chunk_embeddings(tmp_path):
+    db_path = tmp_path / "expert_digest.sqlite3"
+    document = _document("第一篇")
+    chunk = Chunk.create(document_id=document.id, text="第一段", chunk_index=0)
+    save_documents(db_path, [document])
+    save_chunks(db_path, [chunk])
+    embeddings = [
+        ChunkEmbedding.create(
+            chunk_id=chunk.id,
+            model="hash-bow-v1",
+            vector=[0.1, 0.2, 0.3],
+        )
+    ]
+
+    saved = save_chunk_embeddings(db_path, embeddings)
+    loaded = list_chunk_embeddings(db_path, model="hash-bow-v1")
+    cleared = clear_chunk_embeddings(db_path, model="hash-bow-v1")
+
+    assert saved == 1
+    assert loaded == embeddings
+    assert cleared == 1
+    assert list_chunk_embeddings(db_path, model="hash-bow-v1") == []

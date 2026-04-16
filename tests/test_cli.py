@@ -3,6 +3,7 @@ import json
 from expert_digest.cli import main
 from expert_digest.domain.models import Document
 from expert_digest.storage.sqlite_store import (
+    list_chunk_embeddings,
     list_chunks_for_document,
     list_documents,
     save_documents,
@@ -155,3 +156,36 @@ def test_cli_rebuild_chunks_replaces_old_chunk_set(tmp_path, capsys):
     assert "Rebuilt" in output
     new_chunks = list_chunks_for_document(db_path, document.id)
     assert len(new_chunks) == 1
+
+
+def test_cli_build_embeddings_and_search_chunks(tmp_path, capsys):
+    db_path = tmp_path / "expert_digest.sqlite3"
+    document = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+    )
+    save_documents(db_path, [document])
+    assert main(["rebuild-chunks", "--db", str(db_path), "--max-chars", "120"]) == 0
+
+    build_exit = main(["build-embeddings", "--db", str(db_path)])
+    output = capsys.readouterr().out
+
+    assert build_exit == 0
+    assert "Embedded" in output
+    assert len(list_chunk_embeddings(db_path, model="hash-bow-v1")) >= 1
+
+    search_exit = main(
+        [
+            "search-chunks",
+            "IP 运营",
+            "--db",
+            str(db_path),
+            "--top-k",
+            "1",
+        ]
+    )
+    search_output = capsys.readouterr().out
+    assert search_exit == 0
+    assert "score=" in search_output

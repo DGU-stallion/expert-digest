@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from expert_digest.domain.models import Chunk, Document
+from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 
 DEFAULT_DATABASE_PATH = Path("data/processed/expert_digest.sqlite3")
 
@@ -87,6 +88,43 @@ def save_chunks(db_path: str | Path, chunks: Iterable[Chunk]) -> int:
     return len(submitted)
 
 
+def save_chunk_embeddings(
+    db_path: str | Path,
+    embeddings: Iterable[ChunkEmbedding],
+) -> int:
+    """Save chunk embeddings and return number of submitted embeddings."""
+    database_path = Path(db_path)
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    submitted = list(embeddings)
+
+    with _connect(database_path) as connection:
+        _ensure_schema(connection)
+        connection.executemany(
+            """
+            INSERT OR REPLACE INTO chunk_embeddings (
+                id,
+                chunk_id,
+                model,
+                dimensions,
+                vector_json,
+                imported_at
+            )
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            """,
+            [
+                (
+                    embedding.id,
+                    embedding.chunk_id,
+                    embedding.model,
+                    embedding.dimensions,
+                    json.dumps(embedding.vector),
+                )
+                for embedding in submitted
+            ],
+        )
+    return len(submitted)
+
+
 def list_documents(db_path: str | Path) -> list[Document]:
     """Return every stored document in stable title order."""
     database_path = Path(db_path)
@@ -163,6 +201,39 @@ def list_chunks_for_document(db_path: str | Path, document_id: str) -> list[Chun
     return [_chunk_from_row(row) for row in rows]
 
 
+def list_chunk_embeddings(
+    db_path: str | Path,
+    *,
+    model: str | None = None,
+) -> list[ChunkEmbedding]:
+    """Return chunk embeddings in stable chunk order."""
+    database_path = Path(db_path)
+    if not database_path.exists():
+        return []
+
+    with _connect(database_path) as connection:
+        _ensure_schema(connection)
+        if model:
+            rows = connection.execute(
+                """
+                SELECT id, chunk_id, model, dimensions, vector_json
+                FROM chunk_embeddings
+                WHERE model = ?
+                ORDER BY chunk_id, id
+                """,
+                (model,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT id, chunk_id, model, dimensions, vector_json
+                FROM chunk_embeddings
+                ORDER BY model, chunk_id, id
+                """
+            ).fetchall()
+    return [_chunk_embedding_from_row(row) for row in rows]
+
+
 def clear_chunks(db_path: str | Path) -> int:
     """Delete all stored chunks and return number of removed rows."""
     database_path = Path(db_path)
@@ -173,7 +244,41 @@ def clear_chunks(db_path: str | Path) -> int:
         _ensure_schema(connection)
         count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         connection.execute("DELETE FROM chunks")
+        connection.execute("DELETE FROM chunk_embeddings")
     return count
+
+
+def clear_chunk_embeddings(
+    db_path: str | Path,
+    *,
+    model: str | None = None,
+) -> int:
+    """Delete chunk embeddings and return number of removed rows."""
+    database_path = Path(db_path)
+    if not database_path.exists():
+        return 0
+
+    with _connect(database_path) as connection:
+        _ensure_schema(connection)
+        if model:
+            count = connection.execute(
+                """
+                SELECT COUNT(*) FROM chunk_embeddings
+                WHERE model = ?
+                """,
+                (model,),
+            ).fetchone()[0]
+            connection.execute(
+                "DELETE FROM chunk_embeddings WHERE model = ?",
+                (model,),
+            )
+            return count
+
+        count = connection.execute(
+            "SELECT COUNT(*) FROM chunk_embeddings"
+        ).fetchone()[0]
+        connection.execute("DELETE FROM chunk_embeddings")
+        return count
 
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:
@@ -202,6 +307,20 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             end_char INTEGER,
             imported_at TEXT NOT NULL,
             FOREIGN KEY (document_id) REFERENCES documents (id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chunk_embeddings (
+            id TEXT PRIMARY KEY,
+            chunk_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            dimensions INTEGER NOT NULL,
+            vector_json TEXT NOT NULL,
+            imported_at TEXT NOT NULL,
+            UNIQUE (chunk_id, model),
+            FOREIGN KEY (chunk_id) REFERENCES chunks (id)
         )
         """
     )
@@ -236,4 +355,16 @@ def _chunk_from_row(row: sqlite3.Row | tuple[str, ...]) -> Chunk:
         chunk_index=row[3],
         start_char=row[4],
         end_char=row[5],
+    )
+
+
+def _chunk_embedding_from_row(
+    row: sqlite3.Row | tuple[str, str, str, int, str],
+) -> ChunkEmbedding:
+    return ChunkEmbedding(
+        id=row[0],
+        chunk_id=row[1],
+        model=row[2],
+        dimensions=row[3],
+        vector=list(json.loads(row[4])),
     )

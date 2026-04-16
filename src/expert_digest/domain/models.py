@@ -81,3 +81,39 @@ class Chunk:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ChunkEmbedding:
+    """A deterministic embedding vector for one chunk."""
+
+    id: str
+    chunk_id: str
+    model: str
+    vector: list[float]
+    dimensions: int
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        chunk_id: str,
+        model: str,
+        vector: list[float],
+    ) -> ChunkEmbedding:
+        rounded = [round(value, 8) for value in vector]
+        payload = {
+            "chunk_id": chunk_id,
+            "model": model,
+            "vector": rounded,
+        }
+        return cls(
+            id=_stable_hash(payload),
+            chunk_id=chunk_id,
+            model=model,
+            vector=rounded,
+            dimensions=len(rounded),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)

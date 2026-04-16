@@ -4,7 +4,7 @@
 
 - M0 `project init`: completed
 - M1 `data foundation`: completed
-- M2 `data processing`: in progress (cleaner + splitter + chunk rebuild delivered)
+- M2 `data processing`: in progress (chunk pipeline + local embedding + vector retrieval delivered)
 
 ## Completed Capabilities
 
@@ -15,6 +15,8 @@
 5. Build deterministic chunks from documents (`build-chunks`)
 6. Rebuild chunks from scratch (`rebuild-chunks`)
 7. Save/query/clear chunks in SQLite (`chunks` table + query methods)
+8. Build and rebuild chunk embeddings in SQLite (`build-embeddings`, `rebuild-embeddings`)
+9. Top-k chunk similarity retrieval (`search-chunks`)
 
 ## Live Data Integration
 
