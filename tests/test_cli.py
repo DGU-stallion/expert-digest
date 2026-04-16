@@ -477,7 +477,13 @@ def test_cli_generate_handbook_returns_error_on_generation_failure(
 
 def test_cli_generate_handbook_hybrid_uses_default_llm_client(monkeypatch, capsys):
     captured: dict[str, object] = {}
-    fake_llm_client = object()
+
+    class _FakeLLMClient:
+        provider = "nvidia"
+        model = "stepfun-ai/step-3.5-flash"
+        base_url = "https://integrate.api.nvidia.com"
+
+    fake_llm_client = _FakeLLMClient()
     handbook = Handbook(
         author="黄彦臻",
         title="黄彦臻学习手册",
@@ -523,3 +529,81 @@ def test_cli_generate_handbook_hybrid_uses_default_llm_client(monkeypatch, capsy
     assert captured["ccswitch_db_path"] == Path("data/processed/mock_ccswitch.sqlite3")
     assert captured["timeout_seconds"] == 12
     assert captured["max_output_tokens"] == 600
+
+
+def test_cli_generate_handbook_json_output_includes_llm_metadata(
+    monkeypatch, capsys
+):
+    class _FakeLLMClient:
+        base_url = "https://integrate.api.nvidia.com"
+        model = "stepfun-ai/step-3.5-flash"
+        provider = "nvidia"
+
+    handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册\n",
+        source_document_ids=["doc-1"],
+    )
+
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: _FakeLLMClient(),
+    )
+    monkeypatch.setattr("expert_digest.cli.build_handbook", lambda **_kwargs: handbook)
+    monkeypatch.setattr(
+        "expert_digest.cli.write_handbook",
+        lambda *, handbook, output_path: Path(output_path),
+    )
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--synthesis-mode",
+            "hybrid",
+            "--format",
+            "json",
+            "--output",
+            "data/outputs/handbook.json.md",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["author"] == "黄彦臻"
+    assert payload["llm_enabled"] is True
+    assert payload["llm_provider"] == "nvidia"
+    assert payload["llm_model"] == "stepfun-ai/step-3.5-flash"
+    assert payload["llm_base_url"] == "https://integrate.api.nvidia.com"
+
+
+def test_cli_generate_handbook_json_output_handles_no_llm(monkeypatch, capsys):
+    handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册\n",
+        source_document_ids=["doc-1"],
+    )
+
+    monkeypatch.setattr("expert_digest.cli.build_handbook", lambda **_kwargs: handbook)
+    monkeypatch.setattr(
+        "expert_digest.cli.write_handbook",
+        lambda *, handbook, output_path: Path(output_path),
+    )
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--synthesis-mode",
+            "deterministic",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["llm_enabled"] is False
+    assert payload["llm_provider"] is None
+    assert payload["llm_model"] is None
+    assert payload["llm_base_url"] is None

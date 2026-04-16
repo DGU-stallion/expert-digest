@@ -21,6 +21,7 @@ class AnthropicCompatibleClient:
     base_url: str
     api_key: str
     model: str
+    provider: str | None = None
     timeout_seconds: int = 30
     max_output_tokens: int = 700
 
@@ -98,6 +99,7 @@ def load_ccswitch_provider_env(
 def create_anthropic_client_from_mapping(
     mapping: Mapping[str, str],
     *,
+    provider: str | None = None,
     timeout_seconds: int = 30,
     max_output_tokens: int = 700,
 ) -> AnthropicCompatibleClient | None:
@@ -123,6 +125,7 @@ def create_anthropic_client_from_mapping(
         base_url=base_url,
         api_key=api_key,
         model=model,
+        provider=provider,
         timeout_seconds=timeout_seconds,
         max_output_tokens=max_output_tokens,
     )
@@ -143,6 +146,7 @@ def create_default_handbook_llm_client(
     if ccswitch_env:
         client = create_anthropic_client_from_mapping(
             ccswitch_env,
+            provider="nvidia",
             timeout_seconds=timeout_seconds,
             max_output_tokens=max_output_tokens,
         )
@@ -151,6 +155,7 @@ def create_default_handbook_llm_client(
 
     env_client = create_anthropic_client_from_mapping(
         os.environ,
+        provider="env",
         timeout_seconds=timeout_seconds,
         max_output_tokens=max_output_tokens,
     )

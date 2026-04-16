@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from expert_digest import __version__
+from expert_digest.domain.models import Handbook
 from expert_digest.generation.handbook_writer import (
     DeterministicThemeSynthesizer,
     HybridThemeSynthesizer,
@@ -17,6 +18,7 @@ from expert_digest.generation.handbook_writer import (
 )
 from expert_digest.generation.llm_client import (
     DEFAULT_CCSWITCH_DB_PATH,
+    AnthropicCompatibleClient,
     create_default_handbook_llm_client,
 )
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
@@ -213,14 +215,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-handbook":
-        llm_enabled = False
+        llm_client: AnthropicCompatibleClient | None = None
         if args.synthesis_mode == "hybrid":
             llm_client = create_default_handbook_llm_client(
                 ccswitch_db_path=args.ccswitch_db,
                 timeout_seconds=args.llm_timeout,
                 max_output_tokens=args.llm_max_tokens,
             )
-            llm_enabled = llm_client is not None
             synthesizer = HybridThemeSynthesizer(llm_client=llm_client)
         else:
             synthesizer = DeterministicThemeSynthesizer()
@@ -237,10 +238,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as error:
             print(f"Failed to generate handbook: {error}")
             return 1
-        print(
-            f"Generated handbook for {handbook.author}: {output_path} "
-            f"(sources={len(handbook.source_document_ids)}, "
-            f"mode={args.synthesis_mode}, llm_enabled={llm_enabled})"
+        _emit_handbook_result(
+            handbook=handbook,
+            output_path=output_path,
+            synthesis_mode=args.synthesis_mode,
+            llm_client=llm_client,
+            output_format=args.format,
         )
         return 0
 
@@ -331,6 +334,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     handbook_parser.add_argument("--llm-timeout", type=int, default=30)
     handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
+    handbook_parser.add_argument("--format", choices=["text", "json"], default="text")
 
     return parser
 
@@ -360,3 +364,38 @@ def _print_structured_answer(result: StructuredAnswer) -> None:
         for index, label in enumerate(result.recommended_original, start=1):
             print(f"- {index}. {label}")
     print(f"不确定性: {result.uncertainty}")
+
+
+def _emit_handbook_result(
+    *,
+    handbook: Handbook,
+    output_path: Path,
+    synthesis_mode: str,
+    llm_client: AnthropicCompatibleClient | None,
+    output_format: str,
+) -> None:
+    llm_enabled = llm_client is not None
+    llm_provider = llm_client.provider if llm_client is not None else None
+    llm_model = llm_client.model if llm_client is not None else None
+    llm_base_url = llm_client.base_url if llm_client is not None else None
+
+    if output_format == "json":
+        payload = {
+            "author": handbook.author,
+            "title": handbook.title,
+            "output_path": str(output_path),
+            "source_document_ids": handbook.source_document_ids,
+            "synthesis_mode": synthesis_mode,
+            "llm_enabled": llm_enabled,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "llm_base_url": llm_base_url,
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        return
+
+    print(
+        f"Generated handbook for {handbook.author}: {output_path} "
+        f"(sources={len(handbook.source_document_ids)}, "
+        f"mode={synthesis_mode}, llm_enabled={llm_enabled})"
+    )
