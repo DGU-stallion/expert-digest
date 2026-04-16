@@ -18,7 +18,8 @@ from expert_digest.processing.embedder import (
     embed_text,
 )
 from expert_digest.processing.splitter import split_documents
-from expert_digest.retrieval.retriever import rank_chunk_embeddings
+from expert_digest.rag.answering import StructuredAnswer, build_structured_answer
+from expert_digest.retrieval.retriever import hydrate_scored_chunks, rank_chunk_embeddings
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
     clear_chunk_embeddings,
@@ -154,6 +155,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{document.id}\t{document.author}\t{document.title}{url}")
         return 0
 
+    if args.command == "ask":
+        chunk_embeddings = list_chunk_embeddings(args.db, model=args.model)
+        if not chunk_embeddings:
+            result = build_structured_answer(question=args.query, evidence_chunks=[])
+            _print_structured_answer(result)
+            return 0
+
+        query_vector = embed_text(
+            args.query,
+            dim=chunk_embeddings[0].dimensions,
+        )
+        ranked = rank_chunk_embeddings(
+            query_vector=query_vector,
+            chunk_embeddings=chunk_embeddings,
+            top_k=args.top_k,
+        )
+        chunks = {chunk.id: chunk for chunk in list_chunks(args.db)}
+        documents = {document.id: document for document in list_documents(args.db)}
+        evidence_chunks = hydrate_scored_chunks(
+            ranked,
+            chunks_by_id=chunks,
+            documents_by_id=documents,
+        )
+        result = build_structured_answer(
+            question=args.query,
+            evidence_chunks=evidence_chunks,
+        )
+        _print_structured_answer(result)
+        return 0
+
     parser.print_help()
     return 0
 
@@ -207,4 +238,30 @@ def _build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("--author")
     list_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
 
+    ask_parser = subparsers.add_parser("ask")
+    ask_parser.add_argument("query")
+    ask_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    ask_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
+    ask_parser.add_argument("--top-k", type=int, default=3)
+
     return parser
+
+
+def _print_structured_answer(result: StructuredAnswer) -> None:
+    print(f"回答: {result.answer}")
+    print("依据:")
+    if not result.evidence:
+        print("- (无)")
+    else:
+        for index, item in enumerate(result.evidence, start=1):
+            print(
+                f"- {index}. score={item.score:.4f} "
+                f"{item.title} / {item.author} / {item.snippet}"
+            )
+    print("推荐原文:")
+    if not result.recommended_original:
+        print("- (无)")
+    else:
+        for index, label in enumerate(result.recommended_original, start=1):
+            print(f"- {index}. {label}")
+    print(f"不确定性: {result.uncertainty}")
