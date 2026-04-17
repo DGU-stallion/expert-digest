@@ -25,6 +25,7 @@ from expert_digest.generation.llm_client import (
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
+from expert_digest.knowledge.topic_clusterer import TopicCluster, build_topic_clusters
 from expert_digest.processing.cleaner import clean_document
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
@@ -204,6 +205,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model=args.model,
                 top_k=args.top_k,
                 max_themes=args.max_themes,
+                theme_source=args.theme_source,
+                num_topics=args.num_topics,
                 synthesizer=synthesizer,
             )
             output_path = write_handbook(handbook=handbook, output_path=args.output)
@@ -223,6 +226,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if args.save_run_metadata is not None:
             _save_run_metadata(payload=payload, output_path=args.save_run_metadata)
+        return 0
+
+    if args.command == "cluster-topics":
+        topics = build_topic_clusters(
+            db_path=args.db,
+            model=args.model,
+            num_topics=args.num_topics,
+            top_docs_per_topic=args.top_docs,
+            max_iter=args.max_iter,
+        )
+        _emit_topic_clusters(topics=topics, output_format=args.format)
         return 0
 
     parser.print_help()
@@ -296,6 +310,12 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser.add_argument("--top-k", type=int, default=3)
     handbook_parser.add_argument("--max-themes", type=int, default=3)
     handbook_parser.add_argument(
+        "--theme-source",
+        choices=["preset", "cluster"],
+        default="preset",
+    )
+    handbook_parser.add_argument("--num-topics", type=int, default=3)
+    handbook_parser.add_argument(
         "--output",
         type=Path,
         default=Path("data/outputs/handbook.md"),
@@ -314,6 +334,14 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
     handbook_parser.add_argument("--format", choices=["text", "json"], default="text")
     handbook_parser.add_argument("--save-run-metadata", type=Path, default=None)
+
+    cluster_parser = subparsers.add_parser("cluster-topics")
+    cluster_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    cluster_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
+    cluster_parser.add_argument("--num-topics", type=int, default=3)
+    cluster_parser.add_argument("--top-docs", type=int, default=3)
+    cluster_parser.add_argument("--max-iter", type=int, default=30)
+    cluster_parser.add_argument("--format", choices=["text", "json"], default="text")
 
     return parser
 
@@ -409,3 +437,31 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _emit_topic_clusters(*, topics: list[TopicCluster], output_format: str) -> None:
+    if output_format == "json":
+        print(
+            json.dumps(
+                {"topics": [asdict(topic) for topic in topics]},
+                ensure_ascii=False,
+            )
+        )
+        return
+    _print_topic_clusters(topics)
+
+
+def _print_topic_clusters(topics: list[TopicCluster]) -> None:
+    if not topics:
+        print("No topic clusters generated.")
+        return
+    for index, topic in enumerate(topics, start=1):
+        print(f"Topic {index}: {topic.label} (chunks={topic.chunk_count})")
+        if not topic.representative_documents:
+            print("- representative docs: (无)")
+            continue
+        for doc_index, document in enumerate(topic.representative_documents, start=1):
+            print(
+                f"- {doc_index}. score={document.score:.4f} "
+                f"{document.title} / {document.author}"
+            )

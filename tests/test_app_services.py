@@ -173,6 +173,50 @@ def test_generate_handbook_rejects_unsupported_synthesis_mode():
         )
 
 
+def test_generate_handbook_passes_theme_source_and_num_topics(monkeypatch):
+    captured: dict[str, object] = {}
+    fake_handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册",
+        source_document_ids=["doc-1"],
+    )
+
+    monkeypatch.setattr(
+        "expert_digest.app.services.create_default_handbook_llm_client",
+        lambda **_kwargs: None,
+    )
+
+    def _fake_build_handbook(**kwargs):
+        captured.update(kwargs)
+        return fake_handbook
+
+    monkeypatch.setattr(
+        "expert_digest.app.services.build_handbook",
+        _fake_build_handbook,
+    )
+    monkeypatch.setattr(
+        "expert_digest.app.services.write_handbook",
+        lambda *, handbook, output_path: Path(output_path),
+    )
+
+    result = generate_handbook(
+        db_path=Path("data/processed/zhihu_huang.sqlite3"),
+        author="黄彦臻",
+        model="hash-bow-v1",
+        top_k=3,
+        max_themes=3,
+        output_path=Path("data/outputs/handbook.md"),
+        synthesis_mode="hybrid",
+        theme_source="cluster",
+        num_topics=5,
+    )
+
+    assert result.handbook == fake_handbook
+    assert captured["theme_source"] == "cluster"
+    assert captured["num_topics"] == 5
+
+
 def test_persist_uploaded_jsonl_writes_uploaded_content():
     upload_dir = Path(".tmp") / f"test_uploaded_jsonl_{uuid4().hex}"
     payload = (

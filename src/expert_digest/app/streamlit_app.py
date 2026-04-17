@@ -229,6 +229,15 @@ def _render_ask_page(*, st, db_path: Path, model: str) -> None:
 def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
     st.subheader("手册预览")
     author = st.text_input("作者过滤（可选）", value="")
+    theme_source = st.selectbox(
+        "主题组织方式",
+        options=["preset", "cluster"],
+        index=0,
+    )
+    if theme_source == "cluster":
+        num_topics = st.slider("num_topics", min_value=1, max_value=10, value=3)
+    else:
+        num_topics = 3
     top_k = st.slider("theme top_k", min_value=1, max_value=10, value=3)
     max_themes = st.slider("max_themes", min_value=1, max_value=8, value=3)
     synthesis_mode = st.selectbox(
@@ -264,6 +273,8 @@ def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
                 max_themes=max_themes,
                 output_path=Path(output_path),
                 synthesis_mode=synthesis_mode,
+                theme_source=theme_source,
+                num_topics=num_topics,
                 ccswitch_db_path=Path(ccswitch_db),
                 llm_timeout=int(llm_timeout),
                 llm_max_tokens=int(llm_max_tokens),

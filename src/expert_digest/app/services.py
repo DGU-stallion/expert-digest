@@ -172,6 +172,8 @@ def generate_handbook(
     max_themes: int,
     output_path: str | Path,
     synthesis_mode: str = "hybrid",
+    theme_source: str = "preset",
+    num_topics: int = 3,
     ccswitch_db_path: str | Path = DEFAULT_CCSWITCH_DB_PATH,
     llm_timeout: int = 30,
     llm_max_tokens: int = 700,
@@ -195,6 +197,8 @@ def generate_handbook(
         model=model,
         top_k=top_k,
         max_themes=max_themes,
+        theme_source=theme_source,
+        num_topics=num_topics,
         synthesizer=synthesizer,
     )
     resolved_output_path = write_handbook(handbook=handbook, output_path=output_path)

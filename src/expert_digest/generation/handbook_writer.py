@@ -9,6 +9,10 @@ from typing import Protocol
 
 from expert_digest.domain.models import Chunk, Document, Handbook
 from expert_digest.generation.prompts import build_theme_summary_prompts
+from expert_digest.knowledge.topic_clusterer import (
+    TopicCluster,
+    cluster_chunks_by_embeddings,
+)
 from expert_digest.processing.embedder import DEFAULT_EMBEDDING_MODEL, embed_text
 from expert_digest.retrieval.retriever import (
     RetrievedChunk,
@@ -165,12 +169,18 @@ def build_handbook(
     model: str = DEFAULT_EMBEDDING_MODEL,
     top_k: int = 3,
     max_themes: int = 3,
+    theme_source: str = "preset",
+    num_topics: int = 3,
     synthesizer: ThemeSynthesizer | None = None,
 ) -> Handbook:
     if top_k <= 0:
         raise ValueError("top_k must be > 0")
     if max_themes <= 0:
         raise ValueError("max_themes must be > 0")
+    if num_topics <= 0:
+        raise ValueError("num_topics must be > 0")
+    if theme_source not in {"preset", "cluster"}:
+        raise ValueError(f"unsupported theme_source: {theme_source}")
 
     documents = (
         get_documents_by_author(db_path, author)
@@ -194,6 +204,69 @@ def build_handbook(
     ]
     summarizer: ThemeSynthesizer = synthesizer or HybridThemeSynthesizer()
 
+    if theme_source == "cluster":
+        clusters = cluster_chunks_by_embeddings(
+            chunks_by_id=chunks_by_id,
+            documents_by_id=documents_by_id,
+            chunk_embeddings=chunk_embeddings,
+            num_topics=num_topics,
+            top_docs_per_topic=top_k,
+        )
+        theme_sections = _build_theme_sections_from_topics(
+            topic_clusters=clusters,
+            chunks_by_id=chunks_by_id,
+            documents_by_id=documents_by_id,
+            max_themes=max_themes,
+            top_k=top_k,
+            synthesizer=summarizer,
+        )
+        if not theme_sections:
+            theme_sections = _build_theme_sections_from_definitions(
+                max_themes=max_themes,
+                top_k=top_k,
+                chunks=chunks,
+                chunks_by_id=chunks_by_id,
+                documents_by_id=documents_by_id,
+                chunk_embeddings=chunk_embeddings,
+                synthesizer=summarizer,
+            )
+    else:
+        theme_sections = _build_theme_sections_from_definitions(
+            max_themes=max_themes,
+            top_k=top_k,
+            chunks=chunks,
+            chunks_by_id=chunks_by_id,
+            documents_by_id=documents_by_id,
+            chunk_embeddings=chunk_embeddings,
+            synthesizer=summarizer,
+        )
+
+    author_label = author or _resolve_author_label(documents)
+    markdown = _render_handbook_markdown(
+        author_label=author_label,
+        documents=documents,
+        chunks=chunks,
+        theme_sections=theme_sections,
+        theme_source=theme_source,
+    )
+    return Handbook(
+        author=author_label,
+        title=f"{author_label}学习手册",
+        markdown=markdown,
+        source_document_ids=[document.id for document in documents],
+    )
+
+
+def _build_theme_sections_from_definitions(
+    *,
+    max_themes: int,
+    top_k: int,
+    chunks: list[Chunk],
+    chunks_by_id: dict[str, Chunk],
+    documents_by_id: dict[str, Document],
+    chunk_embeddings: list,
+    synthesizer: ThemeSynthesizer,
+) -> list[ThemeSection]:
     theme_sections: list[ThemeSection] = []
     for definition in DEFAULT_THEME_DEFINITIONS[:max_themes]:
         evidence = _collect_theme_evidence(
@@ -204,7 +277,7 @@ def build_handbook(
             documents_by_id=documents_by_id,
             chunk_embeddings=chunk_embeddings,
         )
-        summary = summarizer.summarize_theme(
+        summary = synthesizer.summarize_theme(
             theme_name=definition.name,
             question=definition.question,
             evidence_chunks=evidence,
@@ -216,20 +289,63 @@ def build_handbook(
                 evidence=evidence,
             )
         )
+    return theme_sections
 
-    author_label = author or _resolve_author_label(documents)
-    markdown = _render_handbook_markdown(
-        author_label=author_label,
-        documents=documents,
-        chunks=chunks,
-        theme_sections=theme_sections,
-    )
-    return Handbook(
-        author=author_label,
-        title=f"{author_label}学习手册",
-        markdown=markdown,
-        source_document_ids=[document.id for document in documents],
-    )
+
+def _build_theme_sections_from_topics(
+    *,
+    topic_clusters: list[TopicCluster],
+    chunks_by_id: dict[str, Chunk],
+    documents_by_id: dict[str, Document],
+    max_themes: int,
+    top_k: int,
+    synthesizer: ThemeSynthesizer,
+) -> list[ThemeSection]:
+    sections: list[ThemeSection] = []
+    for topic in topic_clusters[:max_themes]:
+        score_by_chunk = {
+            item.supporting_chunk_id: item.score
+            for item in topic.representative_documents
+        }
+        evidence: list[RetrievedChunk] = []
+        for chunk_id in topic.representative_chunk_ids:
+            chunk = chunks_by_id.get(chunk_id)
+            if chunk is None:
+                continue
+            document = documents_by_id.get(chunk.document_id)
+            if document is None:
+                continue
+            evidence.append(
+                RetrievedChunk(
+                    chunk_id=chunk.id,
+                    score=score_by_chunk.get(chunk.id, 0.0),
+                    document_id=document.id,
+                    title=document.title,
+                    author=document.author,
+                    text=chunk.text,
+                    url=document.url,
+                )
+            )
+            if len(evidence) >= top_k:
+                break
+
+        if not evidence:
+            continue
+
+        question = "该主题最核心的观点与证据是什么？"
+        summary = synthesizer.summarize_theme(
+            theme_name=topic.label,
+            question=question,
+            evidence_chunks=evidence,
+        )
+        sections.append(
+            ThemeSection(
+                definition=ThemeDefinition(name=topic.label, question=question),
+                summary=summary,
+                evidence=evidence,
+            )
+        )
+    return sections
 
 
 def write_handbook(handbook: Handbook, *, output_path: str | Path) -> Path:
@@ -297,6 +413,7 @@ def _render_handbook_markdown(
     documents: list[Document],
     chunks: list[Chunk],
     theme_sections: list[ThemeSection],
+    theme_source: str,
 ) -> str:
     reading_path = _build_reading_path(documents, theme_sections)
 
@@ -313,6 +430,7 @@ def _render_handbook_markdown(
     lines.append("## 专家内容总览")
     lines.append(
         f"当前样本包含 {len(documents)} 篇原文，切分为 {len(chunks)} 个 chunk。"
+        f"主题组织方式：{theme_source}。"
         "本版手册由混合模式生成：优先 LLM（可选），失败时回退确定性模板。"
     )
     lines.append("")
