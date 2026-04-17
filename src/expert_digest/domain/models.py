@@ -117,3 +117,16 @@ class ChunkEmbedding:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class Handbook:
+    """A generated learning handbook for one author or author set."""
+
+    author: str
+    title: str
+    markdown: str
+    source_document_ids: list[str]
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)

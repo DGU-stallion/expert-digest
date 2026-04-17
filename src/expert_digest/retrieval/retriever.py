@@ -3,16 +3,27 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from expert_digest.domain.models import ChunkEmbedding
+from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 
 
 @dataclass(frozen=True)
 class ScoredChunk:
     chunk_id: str
     score: float
+
+
+@dataclass(frozen=True)
+class RetrievedChunk:
+    chunk_id: str
+    score: float
+    document_id: str
+    title: str
+    author: str
+    text: str
+    url: str | None = None
 
 
 def cosine_similarity(first: list[float], second: list[float]) -> float:
@@ -46,3 +57,31 @@ def rank_chunk_embeddings(
     ]
     ranked = sorted(scored, key=lambda item: item.score, reverse=True)
     return ranked[:top_k]
+
+
+def hydrate_scored_chunks(
+    scored_chunks: Iterable[ScoredChunk],
+    *,
+    chunks_by_id: Mapping[str, Chunk],
+    documents_by_id: Mapping[str, Document],
+) -> list[RetrievedChunk]:
+    hydrated: list[RetrievedChunk] = []
+    for scored in scored_chunks:
+        chunk = chunks_by_id.get(scored.chunk_id)
+        if chunk is None:
+            continue
+        document = documents_by_id.get(chunk.document_id)
+        if document is None:
+            continue
+        hydrated.append(
+            RetrievedChunk(
+                chunk_id=chunk.id,
+                score=scored.score,
+                document_id=document.id,
+                title=document.title,
+                author=document.author,
+                text=chunk.text,
+                url=document.url,
+            )
+        )
+    return hydrated

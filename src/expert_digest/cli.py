@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 from expert_digest import __version__
+from expert_digest.generation.handbook_writer import (
+    DeterministicThemeSynthesizer,
+    HybridThemeSynthesizer,
+    build_handbook,
+    write_handbook,
+)
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
@@ -18,7 +26,8 @@ from expert_digest.processing.embedder import (
     embed_text,
 )
 from expert_digest.processing.splitter import split_documents
-from expert_digest.retrieval.retriever import rank_chunk_embeddings
+from expert_digest.rag.answering import StructuredAnswer, build_structured_answer
+from expert_digest.retrieval.retriever import hydrate_scored_chunks, rank_chunk_embeddings
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
     clear_chunk_embeddings,
@@ -154,6 +163,74 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{document.id}\t{document.author}\t{document.title}{url}")
         return 0
 
+    if args.command == "ask":
+        chunk_embeddings = list_chunk_embeddings(args.db, model=args.model)
+        min_top_score = (
+            args.min_top_score if args.min_top_score is not None else args.min_score
+        )
+        if not chunk_embeddings:
+            result = build_structured_answer(
+                question=args.query,
+                evidence_chunks=[],
+                max_evidence=args.max_evidence,
+                min_top_score=min_top_score,
+                min_avg_score=args.min_avg_score,
+            )
+            _emit_structured_answer(result, output_format=args.format)
+            return 0
+
+        query_vector = embed_text(
+            args.query,
+            dim=chunk_embeddings[0].dimensions,
+        )
+        ranked = rank_chunk_embeddings(
+            query_vector=query_vector,
+            chunk_embeddings=chunk_embeddings,
+            top_k=args.top_k,
+        )
+        chunks = {chunk.id: chunk for chunk in list_chunks(args.db)}
+        documents = {document.id: document for document in list_documents(args.db)}
+        evidence_chunks = hydrate_scored_chunks(
+            ranked,
+            chunks_by_id=chunks,
+            documents_by_id=documents,
+        )
+        result = build_structured_answer(
+            question=args.query,
+            evidence_chunks=evidence_chunks,
+            max_evidence=args.max_evidence,
+            min_top_score=min_top_score,
+            min_avg_score=args.min_avg_score,
+        )
+        _emit_structured_answer(result, output_format=args.format)
+        return 0
+
+    if args.command == "generate-handbook":
+        synthesizer = (
+            HybridThemeSynthesizer()
+            if args.synthesis_mode == "hybrid"
+            else DeterministicThemeSynthesizer()
+        )
+        try:
+            handbook = build_handbook(
+                db_path=args.db,
+                author=args.author,
+                model=args.model,
+                top_k=args.top_k,
+                max_themes=args.max_themes,
+                synthesizer=synthesizer,
+            )
+            output_path = write_handbook(handbook=handbook, output_path=args.output)
+        except ValueError as error:
+            print(f"Failed to generate handbook: {error}")
+            return 1
+        print(
+            f"Generated handbook for {handbook.author}: {output_path} "
+            f"(sources={len(handbook.source_document_ids)}, "
+            f"mode={args.synthesis_mode})"
+        )
+        return 0
+
     parser.print_help()
     return 0
 
@@ -207,4 +284,59 @@ def _build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("--author")
     list_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
 
+    ask_parser = subparsers.add_parser("ask")
+    ask_parser.add_argument("query")
+    ask_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    ask_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
+    ask_parser.add_argument("--top-k", type=int, default=3)
+    ask_parser.add_argument("--min-score", type=float, default=0.05)
+    ask_parser.add_argument("--min-top-score", type=float, default=None)
+    ask_parser.add_argument("--min-avg-score", type=float, default=0.03)
+    ask_parser.add_argument("--max-evidence", type=int, default=3)
+    ask_parser.add_argument("--format", choices=["text", "json"], default="text")
+
+    handbook_parser = subparsers.add_parser("generate-handbook")
+    handbook_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    handbook_parser.add_argument("--author")
+    handbook_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
+    handbook_parser.add_argument("--top-k", type=int, default=3)
+    handbook_parser.add_argument("--max-themes", type=int, default=3)
+    handbook_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/outputs/handbook.md"),
+    )
+    handbook_parser.add_argument(
+        "--synthesis-mode",
+        choices=["deterministic", "hybrid"],
+        default="hybrid",
+    )
+
     return parser
+
+
+def _emit_structured_answer(result: StructuredAnswer, *, output_format: str) -> None:
+    if output_format == "json":
+        print(json.dumps(asdict(result), ensure_ascii=False))
+        return
+    _print_structured_answer(result)
+
+
+def _print_structured_answer(result: StructuredAnswer) -> None:
+    print(f"回答: {result.answer}")
+    print("依据:")
+    if not result.evidence:
+        print("- (无)")
+    else:
+        for index, item in enumerate(result.evidence, start=1):
+            print(
+                f"- {index}. score={item.score:.4f} "
+                f"{item.title} / {item.author} / {item.snippet}"
+            )
+    print("推荐原文:")
+    if not result.recommended_original:
+        print("- (无)")
+    else:
+        for index, label in enumerate(result.recommended_original, start=1):
+            print(f"- {index}. {label}")
+    print(f"不确定性: {result.uncertainty}")

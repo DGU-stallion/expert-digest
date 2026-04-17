@@ -1,7 +1,9 @@
 import json
+from pathlib import Path
 
 from expert_digest.cli import main
-from expert_digest.domain.models import Document
+from expert_digest.domain.models import Chunk, ChunkEmbedding, Document, Handbook
+from expert_digest.retrieval.retriever import ScoredChunk
 from expert_digest.storage.sqlite_store import (
     list_chunk_embeddings,
     list_chunks_for_document,
@@ -189,3 +191,276 @@ def test_cli_build_embeddings_and_search_chunks(tmp_path, capsys):
     search_output = capsys.readouterr().out
     assert search_exit == 0
     assert "score=" in search_output
+
+
+def test_cli_ask_refuses_when_no_embeddings(monkeypatch, capsys):
+    monkeypatch.setattr("expert_digest.cli.list_chunk_embeddings", lambda *_a, **_k: [])
+
+    exit_code = main(["ask", "什么是长期主义？"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "回答:" in output
+    assert "无法基于当前知识库回答" in output
+    assert "依据:" in output
+    assert "推荐原文:" in output
+    assert "不确定性:" in output
+
+
+def test_cli_ask_returns_structured_answer_with_evidence(monkeypatch, capsys):
+    document = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+        url="https://example.com/p1",
+    )
+    chunk = Chunk.create(
+        document_id=document.id,
+        text="泡泡玛特的核心在于IP运营与预期管理。",
+        chunk_index=0,
+    )
+    embedding = ChunkEmbedding.create(
+        chunk_id=chunk.id,
+        model="hash-bow-v1",
+        vector=[1.0, 0.0],
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: [embedding],
+    )
+    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
+    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
+    monkeypatch.setattr(
+        "expert_digest.cli.rank_chunk_embeddings",
+        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.99)],
+    )
+
+    exit_code = main(["ask", "泡泡玛特的核心能力是什么？", "--top-k", "1"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "回答:" in output
+    assert "依据:" in output
+    assert "score=0.9900" in output
+    assert "推荐原文:" in output
+    assert "泡泡玛特复盘" in output
+    assert "不确定性:" in output
+
+
+def test_cli_ask_refuses_when_retrieval_score_below_threshold(monkeypatch, capsys):
+    document = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+    )
+    chunk = Chunk.create(
+        document_id=document.id,
+        text="泡泡玛特的核心在于IP运营与预期管理。",
+        chunk_index=0,
+    )
+    embedding = ChunkEmbedding.create(
+        chunk_id=chunk.id,
+        model="hash-bow-v1",
+        vector=[1.0, 0.0],
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: [embedding],
+    )
+    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
+    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
+    monkeypatch.setattr(
+        "expert_digest.cli.rank_chunk_embeddings",
+        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.01)],
+    )
+
+    exit_code = main(["ask", "泡泡玛特的核心能力是什么？", "--top-k", "1"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "无法基于当前知识库回答" in output
+
+
+def test_cli_ask_supports_json_output(monkeypatch, capsys):
+    document = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+        url="https://example.com/p1",
+    )
+    chunk = Chunk.create(
+        document_id=document.id,
+        text="泡泡玛特的核心在于IP运营与预期管理。",
+        chunk_index=0,
+    )
+    embedding = ChunkEmbedding.create(
+        chunk_id=chunk.id,
+        model="hash-bow-v1",
+        vector=[1.0, 0.0],
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: [embedding],
+    )
+    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
+    monkeypatch.setattr("expert_digest.cli.list_documents", lambda *_a, **_k: [document])
+    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
+    monkeypatch.setattr(
+        "expert_digest.cli.rank_chunk_embeddings",
+        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.99)],
+    )
+
+    exit_code = main(
+        [
+            "ask",
+            "泡泡玛特的核心能力是什么？",
+            "--top-k",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["refused"] is False
+    assert payload["evidence"][0]["chunk_id"] == chunk.id
+    assert payload["recommended_original"]
+
+
+def test_cli_ask_refuses_when_average_score_below_threshold(monkeypatch, capsys):
+    document_1 = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特复盘",
+        content="泡泡玛特的核心在于IP运营与预期管理。",
+        source="sample",
+    )
+    document_2 = Document.create(
+        author="黄彦臻",
+        title="渠道策略",
+        content="渠道效率会影响增长速度。",
+        source="sample",
+    )
+    chunk_1 = Chunk.create(
+        document_id=document_1.id,
+        text="泡泡玛特的核心在于IP运营与预期管理。",
+        chunk_index=0,
+    )
+    chunk_2 = Chunk.create(
+        document_id=document_2.id,
+        text="渠道效率会影响增长速度。",
+        chunk_index=0,
+    )
+    embeddings = [
+        ChunkEmbedding.create(
+            chunk_id=chunk_1.id,
+            model="hash-bow-v1",
+            vector=[1.0, 0.0],
+        ),
+        ChunkEmbedding.create(
+            chunk_id=chunk_2.id,
+            model="hash-bow-v1",
+            vector=[0.0, 1.0],
+        ),
+    ]
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: embeddings,
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunks",
+        lambda *_a, **_k: [chunk_1, chunk_2],
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_documents",
+        lambda *_a, **_k: [document_1, document_2],
+    )
+    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
+    monkeypatch.setattr(
+        "expert_digest.cli.rank_chunk_embeddings",
+        lambda **_k: [
+            ScoredChunk(chunk_id=chunk_1.id, score=0.95),
+            ScoredChunk(chunk_id=chunk_2.id, score=0.01),
+        ],
+    )
+
+    exit_code = main(
+        [
+            "ask",
+            "泡泡玛特的核心能力是什么？",
+            "--top-k",
+            "2",
+            "--min-top-score",
+            "0.8",
+            "--min-avg-score",
+            "0.6",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["refused"] is True
+
+
+def test_cli_generate_handbook_writes_output(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+    output_path = Path("data/outputs/test_cli_generate_handbook.md")
+    handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册\n\n## 专家内容总览\n",
+        source_document_ids=["doc-1", "doc-2"],
+    )
+
+    def _fake_build_handbook(**kwargs):
+        captured.update(kwargs)
+        return handbook
+
+    def _fake_write_handbook(*, handbook: Handbook, output_path: str | Path) -> Path:
+        return Path(output_path)
+
+    monkeypatch.setattr("expert_digest.cli.build_handbook", _fake_build_handbook)
+    monkeypatch.setattr("expert_digest.cli.write_handbook", _fake_write_handbook)
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--author",
+            "黄彦臻",
+            "--top-k",
+            "4",
+            "--max-themes",
+            "2",
+            "--output",
+            str(output_path),
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert captured["author"] == "黄彦臻"
+    assert captured["top_k"] == 4
+    assert captured["max_themes"] == 2
+    assert "Generated handbook" in output
+
+
+def test_cli_generate_handbook_returns_error_on_generation_failure(
+    monkeypatch, capsys
+):
+    def _raise_error(**_kwargs):
+        raise ValueError("no documents available for handbook generation")
+
+    monkeypatch.setattr("expert_digest.cli.build_handbook", _raise_error)
+
+    exit_code = main(["generate-handbook"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Failed to generate handbook" in output
