@@ -1,4 +1,4 @@
-from expert_digest.domain.models import Chunk, Document
+from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 
 
 def test_document_create_derives_stable_id_from_content():
@@ -66,4 +66,27 @@ def test_chunk_create_derives_stable_id_from_document_position_and_text():
         "chunk_index": 0,
         "start_char": 0,
         "end_char": 5,
+    }
+
+
+def test_chunk_embedding_create_derives_stable_id_and_dimensions():
+    first = ChunkEmbedding.create(
+        chunk_id="chunk-1",
+        model="hash-bow-v1",
+        vector=[0.1, 0.2, 0.3],
+    )
+    second = ChunkEmbedding.create(
+        chunk_id="chunk-1",
+        model="hash-bow-v1",
+        vector=[0.1, 0.2, 0.3],
+    )
+
+    assert first.id == second.id
+    assert first.dimensions == 3
+    assert first.to_dict() == {
+        "id": first.id,
+        "chunk_id": "chunk-1",
+        "model": "hash-bow-v1",
+        "vector": [0.1, 0.2, 0.3],
+        "dimensions": 3,
     }

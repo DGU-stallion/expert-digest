@@ -5,8 +5,11 @@ will focus on importing local expert articles, storing them, retrieving evidence
 answering questions, recommending original texts, and generating a Markdown
 learning handbook.
 
-This repository currently includes the M1 data foundation: local JSONL/Markdown
-article import, SQLite document storage, and author-based document listing.
+This repository currently includes:
+
+- M1 data foundation: local JSONL/Markdown article import, SQLite document
+  storage, and author-based document listing.
+- M2 kickoff: deterministic chunk splitting and SQLite chunk persistence.
 
 ## Requirements
 
@@ -72,6 +75,42 @@ Import a folder of Markdown files:
 
 ```powershell
 expert-digest import-markdown path/to/markdown-folder --db data/processed/expert_digest.sqlite3
+```
+
+Import a Zhihu crawler export folder (expects `index/content_index.jsonl`):
+
+```powershell
+expert-digest import-zhihu "D:\Project\Zhihu_Crawler\data\zhihu\huang-wei-yan-30" --db data/processed/zhihu_huang.sqlite3
+```
+
+Build chunks from imported documents:
+
+```powershell
+expert-digest build-chunks --db data/processed/zhihu_huang.sqlite3 --max-chars 1200 --min-chars 80
+```
+
+Rebuild chunks (clear old chunks then regenerate):
+
+```powershell
+expert-digest rebuild-chunks --db data/processed/zhihu_huang.sqlite3 --max-chars 1200 --min-chars 80
+```
+
+Build chunk embeddings in SQLite:
+
+```powershell
+expert-digest build-embeddings --db data/processed/zhihu_huang.sqlite3
+```
+
+Rebuild embeddings from existing chunks:
+
+```powershell
+expert-digest rebuild-embeddings --db data/processed/zhihu_huang.sqlite3
+```
+
+Search top chunks by semantic similarity:
+
+```powershell
+expert-digest search-chunks "泡泡玛特 IP 运营" --db data/processed/zhihu_huang.sqlite3 --top-k 5
 ```
 
 JSONL input uses one article per line:
