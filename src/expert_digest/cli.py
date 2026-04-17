@@ -7,13 +7,20 @@ import json
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
+from time import perf_counter
 
 from expert_digest import __version__
+from expert_digest.domain.models import Handbook
 from expert_digest.generation.handbook_writer import (
     DeterministicThemeSynthesizer,
     HybridThemeSynthesizer,
     build_handbook,
     write_handbook,
+)
+from expert_digest.generation.llm_client import (
+    DEFAULT_CCSWITCH_DB_PATH,
+    AnthropicCompatibleClient,
+    create_default_handbook_llm_client,
 )
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
@@ -27,7 +34,10 @@ from expert_digest.processing.embedder import (
 )
 from expert_digest.processing.splitter import split_documents
 from expert_digest.rag.answering import StructuredAnswer, build_structured_answer
-from expert_digest.retrieval.retriever import hydrate_scored_chunks, rank_chunk_embeddings
+from expert_digest.retrieval.retriever import (
+    hydrate_scored_chunks,
+    rank_chunk_embeddings,
+)
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
     clear_chunk_embeddings,
@@ -206,11 +216,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-handbook":
-        synthesizer = (
-            HybridThemeSynthesizer()
-            if args.synthesis_mode == "hybrid"
-            else DeterministicThemeSynthesizer()
-        )
+        llm_client: AnthropicCompatibleClient | None = None
+        start_time = perf_counter()
+        if args.synthesis_mode == "hybrid":
+            llm_client = create_default_handbook_llm_client(
+                ccswitch_db_path=args.ccswitch_db,
+                timeout_seconds=args.llm_timeout,
+                max_output_tokens=args.llm_max_tokens,
+            )
+            synthesizer = HybridThemeSynthesizer(llm_client=llm_client)
+        else:
+            synthesizer = DeterministicThemeSynthesizer()
         try:
             handbook = build_handbook(
                 db_path=args.db,
@@ -224,11 +240,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as error:
             print(f"Failed to generate handbook: {error}")
             return 1
-        print(
-            f"Generated handbook for {handbook.author}: {output_path} "
-            f"(sources={len(handbook.source_document_ids)}, "
-            f"mode={args.synthesis_mode})"
+        runtime_metadata = _collect_synthesis_runtime_metadata(synthesizer)
+        payload = _emit_handbook_result(
+            handbook=handbook,
+            output_path=output_path,
+            synthesis_mode=args.synthesis_mode,
+            llm_client=llm_client,
+            output_format=args.format,
+            latency_ms=int((perf_counter() - start_time) * 1000),
+            fallback_used=runtime_metadata["fallback_used"],
+            error_reason=runtime_metadata["error_reason"],
         )
+        if args.save_run_metadata is not None:
+            _save_run_metadata(payload=payload, output_path=args.save_run_metadata)
         return 0
 
     parser.print_help()
@@ -311,6 +335,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["deterministic", "hybrid"],
         default="hybrid",
     )
+    handbook_parser.add_argument(
+        "--ccswitch-db",
+        type=Path,
+        default=DEFAULT_CCSWITCH_DB_PATH,
+    )
+    handbook_parser.add_argument("--llm-timeout", type=int, default=30)
+    handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
+    handbook_parser.add_argument("--format", choices=["text", "json"], default="text")
+    handbook_parser.add_argument("--save-run-metadata", type=Path, default=None)
 
     return parser
 
@@ -340,3 +373,69 @@ def _print_structured_answer(result: StructuredAnswer) -> None:
         for index, label in enumerate(result.recommended_original, start=1):
             print(f"- {index}. {label}")
     print(f"不确定性: {result.uncertainty}")
+
+
+def _emit_handbook_result(
+    *,
+    handbook: Handbook,
+    output_path: Path,
+    synthesis_mode: str,
+    llm_client: AnthropicCompatibleClient | None,
+    output_format: str,
+    latency_ms: int,
+    fallback_used: bool,
+    error_reason: str | None,
+) -> dict[str, object]:
+    llm_enabled = llm_client is not None
+    llm_provider = getattr(llm_client, "provider", None)
+    llm_model = getattr(llm_client, "model", None)
+    llm_base_url = getattr(llm_client, "base_url", None)
+    payload = {
+        "author": handbook.author,
+        "title": handbook.title,
+        "output_path": str(output_path),
+        "source_document_ids": handbook.source_document_ids,
+        "synthesis_mode": synthesis_mode,
+        "llm_enabled": llm_enabled,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
+        "llm_base_url": llm_base_url,
+        "latency_ms": latency_ms,
+        "fallback_used": fallback_used,
+        "error_reason": error_reason,
+    }
+
+    if output_format == "json":
+        print(json.dumps(payload, ensure_ascii=False))
+        return payload
+
+    print(
+        f"Generated handbook for {handbook.author}: {output_path} "
+        f"(sources={len(handbook.source_document_ids)}, "
+        f"mode={synthesis_mode}, llm_enabled={llm_enabled}, "
+        f"fallback_used={fallback_used}, latency_ms={latency_ms})"
+    )
+    return payload
+
+
+def _collect_synthesis_runtime_metadata(synthesizer: object) -> dict[str, object]:
+    metadata_fn = getattr(synthesizer, "runtime_metadata", None)
+    if callable(metadata_fn):
+        raw = metadata_fn()
+        if isinstance(raw, dict):
+            return {
+                "fallback_used": bool(raw.get("fallback_used", False)),
+                "error_reason": raw.get("error_reason"),
+            }
+    return {
+        "fallback_used": False,
+        "error_reason": None,
+    }
+
+
+def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )

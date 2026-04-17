@@ -9,7 +9,12 @@ This repository currently includes:
 
 - M1 data foundation: local JSONL/Markdown article import, SQLite document
   storage, and author-based document listing.
-- M2 kickoff: deterministic chunk splitting and SQLite chunk persistence.
+- M2 data processing: cleaner/splitter pipeline, chunk persistence, and local
+  embeddings.
+- M3 baseline RAG: evidence retrieval, structured answer output, and refusal
+  policy for low-confidence/no-evidence questions.
+- M4 handbook generation: hybrid (LLM + deterministic fallback) handbook
+  generation with JSON observability metadata export.
 
 ## Requirements
 
@@ -111,6 +116,42 @@ Search top chunks by semantic similarity:
 
 ```powershell
 expert-digest search-chunks "泡泡玛特 IP 运营" --db data/processed/zhihu_huang.sqlite3 --top-k 5
+```
+
+Ask a question with structured RAG output:
+
+```powershell
+expert-digest ask "泡泡玛特的核心能力是什么？" --db data/processed/zhihu_huang.sqlite3 --top-k 3
+```
+
+Ask with machine-readable JSON:
+
+```powershell
+expert-digest ask "泡泡玛特的核心能力是什么？" --db data/processed/zhihu_huang.sqlite3 --format json
+```
+
+Generate handbook (hybrid mode, default):
+
+```powershell
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --output data/outputs/handbook.md
+```
+
+Generate handbook as JSON result (with runtime metadata):
+
+```powershell
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --format json
+```
+
+Generate handbook and save run metadata to JSON file:
+
+```powershell
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --format json --save-run-metadata data/outputs/handbook_run_metadata.json
+```
+
+Force deterministic mode (no LLM):
+
+```powershell
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --synthesis-mode deterministic
 ```
 
 JSONL input uses one article per line:
