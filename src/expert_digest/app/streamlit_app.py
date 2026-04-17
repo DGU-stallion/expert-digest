@@ -1,4 +1,4 @@
-"""Streamlit demo app for ExpertDigest M5."""
+"""Streamlit demo app for ExpertDigest M7."""
 
 from __future__ import annotations
 
@@ -25,15 +25,15 @@ def _load_streamlit():
 
 def run() -> None:
     st = _load_streamlit()
-    st.set_page_config(page_title="ExpertDigest M5 Demo", layout="wide")
-    st.title("ExpertDigest M5 - Streamlit Demo")
-    st.caption("基础闭环：导入 -> 处理 -> 问答 -> 手册预览")
+    st.set_page_config(page_title="ExpertDigest M7 Demo", layout="wide")
+    st.title("ExpertDigest M7 - Streamlit Demo")
+    st.caption("基础闭环 + 主题聚类 + 作者画像/Skill 蒸馏")
 
     db_path_raw = st.sidebar.text_input("数据库路径", value=str(DEFAULT_DATABASE_PATH))
     model = st.sidebar.text_input("Embedding 模型", value=DEFAULT_EMBEDDING_MODEL)
     page = st.sidebar.radio(
         "页面",
-        ("导入数据", "处理数据", "问答检索", "手册预览"),
+        ("导入数据", "处理数据", "问答检索", "手册预览", "画像与Skill"),
     )
     db_path = Path(db_path_raw.strip() or DEFAULT_DATABASE_PATH)
 
@@ -43,8 +43,10 @@ def run() -> None:
         _render_process_page(st=st, db_path=db_path, model=model)
     elif page == "问答检索":
         _render_ask_page(st=st, db_path=db_path, model=model)
-    else:
+    elif page == "手册预览":
         _render_handbook_page(st=st, db_path=db_path, model=model)
+    else:
+        _render_profile_skill_page(st=st, db_path=db_path)
 
 
 def _render_import_page(*, st, db_path: Path) -> None:
@@ -416,6 +418,76 @@ def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
         st.success(f"手册已生成：{result.output_path}")
         st.markdown("### 预览")
         st.markdown(result.handbook.markdown)
+
+
+def _render_profile_skill_page(*, st, db_path: Path) -> None:
+    st.subheader("M7 作者画像与 Skill 草稿")
+    author = st.text_input("作者过滤（可选）", value="", key="profile_author")
+    profile_output = st.text_input(
+        "画像导出路径（可选）",
+        value="data/outputs/author_profile_from_streamlit.json",
+        key="profile_output",
+    )
+
+    if st.button("生成作者画像", type="primary", use_container_width=True):
+        try:
+            profile_result = services.build_author_profile_snapshot(
+                db_path=db_path,
+                author=author.strip() or None,
+                output_path=Path(profile_output.strip())
+                if profile_output.strip()
+                else None,
+            )
+        except Exception as error:  # pragma: no cover
+            st.error(f"生成作者画像失败: {error}")
+            return
+
+        st.success("作者画像已生成")
+        if profile_result.output_path is not None:
+            st.caption(f"画像已导出：{profile_result.output_path}")
+
+        profile = profile_result.profile
+        metric_columns = st.columns(3)
+        metric_columns[0].metric("author", str(profile.get("author", "(无)")))
+        metric_columns[1].metric(
+            "document_count",
+            int(profile.get("document_count", 0)),
+        )
+        metric_columns[2].metric(
+            "source_documents",
+            len(profile.get("source_document_ids", [])),
+        )
+        st.markdown("#### Focus Topics")
+        st.write(profile.get("focus_topics", []))
+        st.markdown("#### Keywords")
+        st.table(profile.get("keywords", []))
+        st.markdown("#### Reasoning Patterns")
+        st.table(profile.get("reasoning_patterns", []))
+
+    st.markdown("---")
+    skill_output = st.text_input(
+        "Skill 草稿输出路径（可选）",
+        value="data/outputs/author_skill_from_streamlit.md",
+        key="skill_output",
+    )
+
+    if st.button("生成 Skill 草稿", use_container_width=True):
+        try:
+            result = services.generate_skill_draft(
+                db_path=db_path,
+                author=author.strip() or None,
+                output_path=(
+                    Path(skill_output.strip()) if skill_output.strip() else None
+                ),
+            )
+        except Exception as error:  # pragma: no cover
+            st.error(f"生成 Skill 草稿失败: {error}")
+            return
+
+        st.success(f"Skill 草稿已生成：{result.output_path}")
+        st.caption("注意：事实性结论仍必须通过 RAG 检索证据提供。")
+        st.markdown("### SKILL.md 预览")
+        st.code(result.markdown, language="markdown")
 
 
 if __name__ == "__main__":

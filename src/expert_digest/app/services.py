@@ -21,6 +21,11 @@ from expert_digest.generation.llm_client import (
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
+from expert_digest.knowledge.author_profile import build_author_profile
+from expert_digest.knowledge.skill_writer import (
+    build_skill_markdown_from_profile,
+    render_skill_filename,
+)
 from expert_digest.knowledge.topic_clusterer import (
     DeterministicTopicLabeler,
     LLMTopicLabeler,
@@ -68,6 +73,19 @@ class TopicClusterResult:
     topics: list[TopicCluster]
     report: TopicReport
     report_output: Path | None
+
+
+@dataclass(frozen=True)
+class AuthorProfileResult:
+    profile: dict[str, object]
+    output_path: Path | None
+
+
+@dataclass(frozen=True)
+class SkillDraftResult:
+    profile: dict[str, object]
+    markdown: str
+    output_path: Path
 
 
 def persist_uploaded_jsonl(
@@ -280,4 +298,57 @@ def cluster_topics(
         topics=topics,
         report=report,
         report_output=resolved_output,
+    )
+
+
+def build_author_profile_snapshot(
+    *,
+    db_path: str | Path,
+    author: str | None = None,
+    max_topics: int = 6,
+    max_keywords: int = 12,
+    max_patterns: int = 5,
+    output_path: str | Path | None = None,
+) -> AuthorProfileResult:
+    profile = build_author_profile(
+        db_path=db_path,
+        author=author,
+        max_topics=max_topics,
+        max_keywords=max_keywords,
+        max_patterns=max_patterns,
+    )
+    payload = profile if isinstance(profile, dict) else asdict(profile)
+
+    resolved_output: Path | None = None
+    if output_path is not None:
+        resolved_output = Path(output_path)
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        resolved_output.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return AuthorProfileResult(profile=payload, output_path=resolved_output)
+
+
+def generate_skill_draft(
+    *,
+    db_path: str | Path,
+    author: str | None = None,
+    output_path: str | Path | None = None,
+) -> SkillDraftResult:
+    profile = build_author_profile(
+        db_path=db_path,
+        author=author,
+    )
+    payload = profile if isinstance(profile, dict) else asdict(profile)
+    markdown = build_skill_markdown_from_profile(payload)
+    resolved_output = Path(output_path) if output_path is not None else Path(
+        "data/outputs"
+    ) / render_skill_filename(author=str(payload.get("author", "author")))
+    resolved_output.parent.mkdir(parents=True, exist_ok=True)
+    resolved_output.write_text(markdown, encoding="utf-8")
+    return SkillDraftResult(
+        profile=payload,
+        markdown=markdown,
+        output_path=resolved_output,
     )

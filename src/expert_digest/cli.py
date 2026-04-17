@@ -25,6 +25,11 @@ from expert_digest.generation.llm_client import (
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
+from expert_digest.knowledge.author_profile import build_author_profile
+from expert_digest.knowledge.skill_writer import (
+    build_skill_markdown_from_profile,
+    render_skill_filename,
+)
 from expert_digest.knowledge.topic_clusterer import (
     DeterministicTopicLabeler,
     LLMTopicLabeler,
@@ -285,6 +290,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "build-author-profile":
+        try:
+            profile = build_author_profile(
+                db_path=args.db,
+                author=args.author,
+                max_topics=args.max_topics,
+                max_keywords=args.max_keywords,
+                max_patterns=args.max_patterns,
+            )
+        except ValueError as error:
+            print(f"Failed to build author profile: {error}")
+            return 1
+        payload = _emit_author_profile(profile=profile, output_format=args.format)
+        if args.output is not None:
+            _save_run_metadata(payload=payload, output_path=args.output)
+        return 0
+
+    if args.command == "generate-skill-draft":
+        try:
+            profile = build_author_profile(
+                db_path=args.db,
+                author=args.author,
+            )
+        except ValueError as error:
+            print(f"Failed to generate skill draft: {error}")
+            return 1
+        payload = profile if isinstance(profile, dict) else asdict(profile)
+        markdown = build_skill_markdown_from_profile(payload)
+        output_path = args.output
+        if output_path is None:
+            output_path = Path("data/outputs") / render_skill_filename(
+                author=str(payload.get("author", "author"))
+            )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown, encoding="utf-8")
+        print(f"Generated skill draft: {output_path}")
+        return 0
+
     parser.print_help()
     return 0
 
@@ -401,6 +444,20 @@ def _build_parser() -> argparse.ArgumentParser:
     cluster_parser.add_argument("--report-output", type=Path, default=None)
     cluster_parser.add_argument("--format", choices=["text", "json"], default="text")
 
+    profile_parser = subparsers.add_parser("build-author-profile")
+    profile_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    profile_parser.add_argument("--author")
+    profile_parser.add_argument("--max-topics", type=int, default=6)
+    profile_parser.add_argument("--max-keywords", type=int, default=12)
+    profile_parser.add_argument("--max-patterns", type=int, default=5)
+    profile_parser.add_argument("--output", type=Path, default=None)
+    profile_parser.add_argument("--format", choices=["text", "json"], default="text")
+
+    skill_parser = subparsers.add_parser("generate-skill-draft")
+    skill_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    skill_parser.add_argument("--author")
+    skill_parser.add_argument("--output", type=Path, default=None)
+
     return parser
 
 
@@ -510,6 +567,49 @@ def _emit_topic_clusters(
         print(json.dumps(payload, ensure_ascii=False))
         return
     _print_topic_clusters(topics, metadata=metadata)
+
+
+def _emit_author_profile(*, profile: object, output_format: str) -> dict[str, object]:
+    payload = profile if isinstance(profile, dict) else asdict(profile)
+    if output_format == "json":
+        print(json.dumps(payload, ensure_ascii=False))
+        return payload
+    _print_author_profile(payload)
+    return payload
+
+
+def _print_author_profile(profile: dict[str, object]) -> None:
+    print(
+        f"Author profile for {profile.get('author')}: "
+        f"documents={profile.get('document_count')}"
+    )
+    focus_topics = profile.get("focus_topics", [])
+    if isinstance(focus_topics, list):
+        focus_topics_text = (
+            ", ".join(str(item) for item in focus_topics) if focus_topics else "(无)"
+        )
+        print(
+            "Focus topics: "
+            + focus_topics_text
+        )
+    keywords = profile.get("keywords", [])
+    if isinstance(keywords, list):
+        print("Top keywords:")
+        if not keywords:
+            print("- (无)")
+        else:
+            for item in keywords:
+                if isinstance(item, dict):
+                    print(f"- {item.get('keyword')} ({item.get('count')})")
+    patterns = profile.get("reasoning_patterns", [])
+    if isinstance(patterns, list):
+        print("Reasoning patterns:")
+        if not patterns:
+            print("- (无)")
+        else:
+            for item in patterns:
+                if isinstance(item, dict):
+                    print(f"- {item.get('pattern')} ({item.get('count')})")
 
 
 def _print_topic_clusters(

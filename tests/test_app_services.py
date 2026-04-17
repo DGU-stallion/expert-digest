@@ -4,9 +4,11 @@ from uuid import uuid4
 import pytest
 
 from expert_digest.app.services import (
+    build_author_profile_snapshot,
     cluster_topics,
     collect_data_overview,
     generate_handbook,
+    generate_skill_draft,
     import_documents,
     persist_uploaded_jsonl,
 )
@@ -303,3 +305,62 @@ def test_cluster_topics_rejects_unsupported_label_mode():
             model="hash-bow-v1",
             label_mode="custom",
         )
+
+
+def test_build_author_profile_snapshot_supports_export(monkeypatch):
+    fake_profile = {
+        "author": "黄彦臻",
+        "document_count": 2,
+        "source_document_ids": ["doc-1", "doc-2"],
+        "focus_topics": ["供给需求"],
+        "keywords": [{"keyword": "风险", "count": 3}],
+        "reasoning_patterns": [{"pattern": "因为...所以...", "count": 2}],
+    }
+
+    monkeypatch.setattr(
+        "expert_digest.app.services.build_author_profile",
+        lambda **_kwargs: fake_profile,
+    )
+
+    result = build_author_profile_snapshot(
+        db_path=Path("data/processed/zhihu_huang.sqlite3"),
+        author="黄彦臻",
+        output_path=Path("data/outputs/author_profile_test.json"),
+    )
+
+    assert result.profile["author"] == "黄彦臻"
+    assert result.output_path == Path("data/outputs/author_profile_test.json")
+    assert result.output_path.exists()
+
+
+def test_generate_skill_draft_supports_default_output(monkeypatch):
+    fake_profile = {
+        "author": "黄彦臻",
+        "document_count": 2,
+        "source_document_ids": ["doc-1", "doc-2"],
+        "focus_topics": ["供给需求"],
+        "keywords": [{"keyword": "风险", "count": 3}],
+        "reasoning_patterns": [{"pattern": "因为...所以...", "count": 2}],
+    }
+
+    monkeypatch.setattr(
+        "expert_digest.app.services.build_author_profile",
+        lambda **_kwargs: fake_profile,
+    )
+    monkeypatch.setattr(
+        "expert_digest.app.services.build_skill_markdown_from_profile",
+        lambda profile: "# SKILL: 黄彦臻风格助理\n",
+    )
+    monkeypatch.setattr(
+        "expert_digest.app.services.render_skill_filename",
+        lambda **_kwargs: "huang_skill.md",
+    )
+
+    result = generate_skill_draft(
+        db_path=Path("data/processed/zhihu_huang.sqlite3"),
+        author="黄彦臻",
+    )
+
+    assert result.profile["author"] == "黄彦臻"
+    assert result.output_path == Path("data/outputs/huang_skill.md")
+    assert result.output_path.exists()

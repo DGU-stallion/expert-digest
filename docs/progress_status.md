@@ -1,4 +1,4 @@
-# ExpertDigest Progress Status (2026-04-17)
+# ExpertDigest Progress Status (2026-04-18)
 
 ## Current Milestone State
 
@@ -9,6 +9,7 @@
 - M4 `handbook generation`: completed
 - M5 `streamlit demo`: completed
 - M6 `topic clustering enhancement`: completed
+- M7 `author profile + skill distillation baseline`: completed
 
 ## Completed Capabilities
 
@@ -34,6 +35,10 @@
 20. Topic naming strategy supports deterministic/LLM modes (`cluster-topics --label-mode`)
 21. Topic cluster evaluation report with proxy metrics (`--report-output`)
 22. Streamlit process page supports topic distribution and representative-doc visualization
+23. Deterministic author profile extraction (`build-author-profile`)
+24. Skill draft generation from author profile (`generate-skill-draft`)
+25. App service support for profile/skill export (`build_author_profile_snapshot`, `generate_skill_draft`)
+26. Streamlit M7 page for profile/skill preview and export
 
 ## Live Data Integration
 
@@ -66,8 +71,15 @@ Current data snapshot:
 4. Optional LLM naming path exists and fail-closed fallback works: pass
 5. Cluster quality evaluation metrics/report output: pass
 
-## Next Recommended Steps (M7)
+## M7 Exit Criteria Check
 
-1. Add author profile baseline generation (关注主题/概念/方法模板).
-2. Add `generate-skill` command skeleton (规则+拒答+引用约束，不保存原文事实).
-3. Keep RAG as factual source of truth and wire profile/skill output to existing handbook metadata.
+1. Author profile baseline (topics/keywords/reasoning patterns): pass
+2. Skill draft baseline (rules/citation constraints/refusal rules): pass
+3. Explicit constraint kept: factual claims still sourced from RAG evidence: pass
+4. Streamlit supports profile + skill preview/export: pass
+
+## Next Recommended Steps (M8)
+
+1. Add evaluation set for profile/skill quality (stability + usefulness + hallucination risk).
+2. Build profile-to-handbook adaptive section ordering and citation density controls.
+3. Introduce optional LLM-assisted profile synthesis with deterministic fallback and observability metadata.
