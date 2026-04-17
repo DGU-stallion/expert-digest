@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 
 from expert_digest.cli import main
-from expert_digest.domain.models import Chunk, ChunkEmbedding, Document, Handbook
-from expert_digest.retrieval.retriever import ScoredChunk
+from expert_digest.domain.models import Document, Handbook
+from expert_digest.rag.answering import AnswerEvidence, StructuredAnswer
 from expert_digest.storage.sqlite_store import (
     list_chunk_embeddings,
     list_chunks_for_document,
@@ -194,7 +194,16 @@ def test_cli_build_embeddings_and_search_chunks(tmp_path, capsys):
 
 
 def test_cli_ask_refuses_when_no_embeddings(monkeypatch, capsys):
-    monkeypatch.setattr("expert_digest.cli.list_chunk_embeddings", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "expert_digest.cli.answer_question",
+        lambda **_kwargs: StructuredAnswer(
+            answer="抱歉，我无法基于当前知识库回答这个问题。",
+            evidence=[],
+            recommended_original=[],
+            uncertainty="未检索到相关证据，结论风险过高。",
+            refused=True,
+        ),
+    )
 
     exit_code = main(["ask", "什么是长期主义？"])
     output = capsys.readouterr().out
@@ -208,36 +217,24 @@ def test_cli_ask_refuses_when_no_embeddings(monkeypatch, capsys):
 
 
 def test_cli_ask_returns_structured_answer_with_evidence(monkeypatch, capsys):
-    document = Document.create(
-        author="黄彦臻",
-        title="泡泡玛特复盘",
-        content="泡泡玛特的核心在于IP运营与预期管理。",
-        source="sample",
-        url="https://example.com/p1",
-    )
-    chunk = Chunk.create(
-        document_id=document.id,
-        text="泡泡玛特的核心在于IP运营与预期管理。",
-        chunk_index=0,
-    )
-    embedding = ChunkEmbedding.create(
-        chunk_id=chunk.id,
-        model="hash-bow-v1",
-        vector=[1.0, 0.0],
-    )
     monkeypatch.setattr(
-        "expert_digest.cli.list_chunk_embeddings",
-        lambda *_a, **_k: [embedding],
-    )
-    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
-    monkeypatch.setattr(
-        "expert_digest.cli.list_documents",
-        lambda *_a, **_k: [document],
-    )
-    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
-    monkeypatch.setattr(
-        "expert_digest.cli.rank_chunk_embeddings",
-        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.99)],
+        "expert_digest.cli.answer_question",
+        lambda **_kwargs: StructuredAnswer(
+            answer="针对问题“泡泡玛特的核心能力是什么？”，当前最相关证据指出：泡泡玛特的核心在于IP运营与预期管理。",
+            evidence=[
+                AnswerEvidence(
+                    chunk_id="chunk-1",
+                    score=0.99,
+                    title="泡泡玛特复盘",
+                    author="黄彦臻",
+                    snippet="泡泡玛特的核心在于IP运营与预期管理。",
+                    url="https://example.com/p1",
+                )
+            ],
+            recommended_original=["泡泡玛特复盘 - https://example.com/p1"],
+            uncertainty="仅检索到 1 条证据。",
+            refused=False,
+        ),
     )
 
     exit_code = main(["ask", "泡泡玛特的核心能力是什么？", "--top-k", "1"])
@@ -253,35 +250,15 @@ def test_cli_ask_returns_structured_answer_with_evidence(monkeypatch, capsys):
 
 
 def test_cli_ask_refuses_when_retrieval_score_below_threshold(monkeypatch, capsys):
-    document = Document.create(
-        author="黄彦臻",
-        title="泡泡玛特复盘",
-        content="泡泡玛特的核心在于IP运营与预期管理。",
-        source="sample",
-    )
-    chunk = Chunk.create(
-        document_id=document.id,
-        text="泡泡玛特的核心在于IP运营与预期管理。",
-        chunk_index=0,
-    )
-    embedding = ChunkEmbedding.create(
-        chunk_id=chunk.id,
-        model="hash-bow-v1",
-        vector=[1.0, 0.0],
-    )
     monkeypatch.setattr(
-        "expert_digest.cli.list_chunk_embeddings",
-        lambda *_a, **_k: [embedding],
-    )
-    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
-    monkeypatch.setattr(
-        "expert_digest.cli.list_documents",
-        lambda *_a, **_k: [document],
-    )
-    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
-    monkeypatch.setattr(
-        "expert_digest.cli.rank_chunk_embeddings",
-        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.01)],
+        "expert_digest.cli.answer_question",
+        lambda **_kwargs: StructuredAnswer(
+            answer="抱歉，我无法基于当前知识库回答这个问题。",
+            evidence=[],
+            recommended_original=[],
+            uncertainty="证据置信度不足。",
+            refused=True,
+        ),
     )
 
     exit_code = main(["ask", "泡泡玛特的核心能力是什么？", "--top-k", "1"])
@@ -292,36 +269,24 @@ def test_cli_ask_refuses_when_retrieval_score_below_threshold(monkeypatch, capsy
 
 
 def test_cli_ask_supports_json_output(monkeypatch, capsys):
-    document = Document.create(
-        author="黄彦臻",
-        title="泡泡玛特复盘",
-        content="泡泡玛特的核心在于IP运营与预期管理。",
-        source="sample",
-        url="https://example.com/p1",
-    )
-    chunk = Chunk.create(
-        document_id=document.id,
-        text="泡泡玛特的核心在于IP运营与预期管理。",
-        chunk_index=0,
-    )
-    embedding = ChunkEmbedding.create(
-        chunk_id=chunk.id,
-        model="hash-bow-v1",
-        vector=[1.0, 0.0],
-    )
     monkeypatch.setattr(
-        "expert_digest.cli.list_chunk_embeddings",
-        lambda *_a, **_k: [embedding],
-    )
-    monkeypatch.setattr("expert_digest.cli.list_chunks", lambda *_a, **_k: [chunk])
-    monkeypatch.setattr(
-        "expert_digest.cli.list_documents",
-        lambda *_a, **_k: [document],
-    )
-    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
-    monkeypatch.setattr(
-        "expert_digest.cli.rank_chunk_embeddings",
-        lambda **_k: [ScoredChunk(chunk_id=chunk.id, score=0.99)],
+        "expert_digest.cli.answer_question",
+        lambda **_kwargs: StructuredAnswer(
+            answer="可回答",
+            evidence=[
+                AnswerEvidence(
+                    chunk_id="chunk-json",
+                    score=0.99,
+                    title="泡泡玛特复盘",
+                    author="黄彦臻",
+                    snippet="泡泡玛特的核心在于IP运营与预期管理。",
+                    url="https://example.com/p1",
+                )
+            ],
+            recommended_original=["泡泡玛特复盘 - https://example.com/p1"],
+            uncertainty="低",
+            refused=False,
+        ),
     )
 
     exit_code = main(
@@ -338,64 +303,20 @@ def test_cli_ask_supports_json_output(monkeypatch, capsys):
 
     assert exit_code == 0
     assert payload["refused"] is False
-    assert payload["evidence"][0]["chunk_id"] == chunk.id
+    assert payload["evidence"][0]["chunk_id"] == "chunk-json"
     assert payload["recommended_original"]
 
 
 def test_cli_ask_refuses_when_average_score_below_threshold(monkeypatch, capsys):
-    document_1 = Document.create(
-        author="黄彦臻",
-        title="泡泡玛特复盘",
-        content="泡泡玛特的核心在于IP运营与预期管理。",
-        source="sample",
-    )
-    document_2 = Document.create(
-        author="黄彦臻",
-        title="渠道策略",
-        content="渠道效率会影响增长速度。",
-        source="sample",
-    )
-    chunk_1 = Chunk.create(
-        document_id=document_1.id,
-        text="泡泡玛特的核心在于IP运营与预期管理。",
-        chunk_index=0,
-    )
-    chunk_2 = Chunk.create(
-        document_id=document_2.id,
-        text="渠道效率会影响增长速度。",
-        chunk_index=0,
-    )
-    embeddings = [
-        ChunkEmbedding.create(
-            chunk_id=chunk_1.id,
-            model="hash-bow-v1",
-            vector=[1.0, 0.0],
+    monkeypatch.setattr(
+        "expert_digest.cli.answer_question",
+        lambda **_kwargs: StructuredAnswer(
+            answer="抱歉，我无法基于当前知识库回答这个问题。",
+            evidence=[],
+            recommended_original=[],
+            uncertainty="平均得分不足。",
+            refused=True,
         ),
-        ChunkEmbedding.create(
-            chunk_id=chunk_2.id,
-            model="hash-bow-v1",
-            vector=[0.0, 1.0],
-        ),
-    ]
-    monkeypatch.setattr(
-        "expert_digest.cli.list_chunk_embeddings",
-        lambda *_a, **_k: embeddings,
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.list_chunks",
-        lambda *_a, **_k: [chunk_1, chunk_2],
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.list_documents",
-        lambda *_a, **_k: [document_1, document_2],
-    )
-    monkeypatch.setattr("expert_digest.cli.embed_text", lambda *_a, **_k: [1.0, 0.0])
-    monkeypatch.setattr(
-        "expert_digest.cli.rank_chunk_embeddings",
-        lambda **_k: [
-            ScoredChunk(chunk_id=chunk_1.id, score=0.95),
-            ScoredChunk(chunk_id=chunk_2.id, score=0.01),
-        ],
     )
 
     exit_code = main(
