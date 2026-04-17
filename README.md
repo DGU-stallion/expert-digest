@@ -154,6 +154,13 @@ Force deterministic mode (no LLM):
 expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --synthesis-mode deterministic
 ```
 
+Run the M5 Streamlit demo (import/process/ask/handbook preview):
+
+```powershell
+python -m pip install -e ".[app]"
+streamlit run src/expert_digest/app/streamlit_app.py
+```
+
 JSONL input uses one article per line:
 
 ```json
