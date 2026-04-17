@@ -2,6 +2,8 @@ import pytest
 
 from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 from expert_digest.knowledge.topic_clusterer import (
+    DeterministicTopicLabeler,
+    LLMTopicLabeler,
     TopicCluster,
     build_topic_clusters,
     cluster_chunks_by_embeddings,
@@ -113,3 +115,61 @@ def test_build_topic_clusters_returns_empty_without_embeddings(monkeypatch):
     )
 
     assert topics == []
+
+
+def test_cluster_chunks_by_embeddings_supports_custom_labeler():
+    chunks_by_id, documents_by_id, embeddings = _build_fixture()
+
+    class _StaticLabeler:
+        def label_topic(self, *, topic: TopicCluster, topic_index: int) -> str:
+            return f"固定主题{topic_index}"
+
+    topics = cluster_chunks_by_embeddings(
+        chunks_by_id=chunks_by_id,
+        documents_by_id=documents_by_id,
+        chunk_embeddings=embeddings,
+        num_topics=2,
+        top_docs_per_topic=1,
+        labeler=_StaticLabeler(),
+    )
+
+    assert [topic.label for topic in topics] == ["固定主题1", "固定主题2"]
+
+
+def test_llm_topic_labeler_uses_llm_result():
+    topic = TopicCluster(
+        topic_id="topic-1",
+        label="主题1：占位",
+        chunk_count=4,
+        representative_chunk_ids=["c1"],
+        representative_documents=[],
+    )
+
+    class _FakeLLMClient:
+        def generate(self, *, system_prompt: str, user_prompt: str) -> str:
+            assert "主题命名" in system_prompt
+            assert "topic-1" in user_prompt
+            return "价值投资与周期判断"
+
+    labeler = LLMTopicLabeler(llm_client=_FakeLLMClient())
+    label = labeler.label_topic(topic=topic, topic_index=1)
+
+    assert label == "主题1：价值投资与周期判断"
+    assert labeler.runtime_metadata()["fallback_used"] is False
+
+
+def test_llm_topic_labeler_falls_back_when_client_missing():
+    topic = TopicCluster(
+        topic_id="topic-1",
+        label="主题1：占位",
+        chunk_count=4,
+        representative_chunk_ids=["c1"],
+        representative_documents=[],
+    )
+
+    fallback = DeterministicTopicLabeler()
+    labeler = LLMTopicLabeler(llm_client=None, fallback=fallback)
+    label = labeler.label_topic(topic=topic, topic_index=2)
+
+    assert label == "主题2：未命名主题"
+    assert labeler.runtime_metadata()["fallback_used"] is True

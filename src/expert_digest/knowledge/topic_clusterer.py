@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from statistics import mean
+from typing import Protocol
 
 from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 from expert_digest.processing.embedder import DEFAULT_EMBEDDING_MODEL
@@ -35,6 +36,80 @@ class TopicCluster:
     representative_documents: list[TopicRepresentativeDocument]
 
 
+class TopicNamingLLMClient(Protocol):
+    """Protocol for topic-label generation compatible with handbook llm client."""
+
+    def generate(self, *, system_prompt: str, user_prompt: str) -> str: ...
+
+
+class TopicLabeler(Protocol):
+    """Protocol for topic label generation strategy."""
+
+    def label_topic(self, *, topic: TopicCluster, topic_index: int) -> str: ...
+
+
+class DeterministicTopicLabeler:
+    """Stable fallback labeler based on representative document title."""
+
+    def label_topic(self, *, topic: TopicCluster, topic_index: int) -> str:
+        if topic.representative_documents:
+            lead_title = topic.representative_documents[0].title
+        else:
+            lead_title = "未命名主题"
+        return f"主题{topic_index}：{_shorten_label(lead_title)}"
+
+
+class LLMTopicLabeler:
+    """LLM-first topic labeler with deterministic fallback."""
+
+    def __init__(
+        self,
+        *,
+        llm_client: TopicNamingLLMClient | None,
+        fallback: TopicLabeler | None = None,
+    ) -> None:
+        self._llm_client = llm_client
+        self._fallback = fallback or DeterministicTopicLabeler()
+        self._llm_attempts = 0
+        self._llm_failures = 0
+        self._last_error_reason: str | None = None
+
+    def label_topic(self, *, topic: TopicCluster, topic_index: int) -> str:
+        if self._llm_client is not None:
+            self._llm_attempts += 1
+            system_prompt, user_prompt = _build_topic_label_prompts(topic=topic)
+            try:
+                raw = self._llm_client.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                ).strip()
+                candidate = _extract_candidate_label(raw)
+                if candidate:
+                    return f"主题{topic_index}：{_shorten_label(candidate)}"
+            except Exception:
+                self._llm_failures += 1
+                self._last_error_reason = "topic_label_generation_error"
+        return self._fallback.label_topic(topic=topic, topic_index=topic_index)
+
+    def runtime_metadata(self) -> dict[str, object]:
+        if self._llm_client is None:
+            return {
+                "fallback_used": True,
+                "error_reason": "llm_client_unavailable",
+            }
+        if self._llm_failures > 0:
+            return {
+                "fallback_used": True,
+                "error_reason": (
+                    self._last_error_reason or "topic_label_generation_error"
+                ),
+            }
+        return {
+            "fallback_used": False,
+            "error_reason": None,
+        }
+
+
 def build_topic_clusters(
     *,
     db_path: str | Path,
@@ -42,6 +117,7 @@ def build_topic_clusters(
     num_topics: int = 3,
     top_docs_per_topic: int = 3,
     max_iter: int = 30,
+    labeler: TopicLabeler | None = None,
 ) -> list[TopicCluster]:
     documents = list_documents(db_path)
     chunks = list_chunks(db_path)
@@ -53,6 +129,7 @@ def build_topic_clusters(
         num_topics=num_topics,
         top_docs_per_topic=top_docs_per_topic,
         max_iter=max_iter,
+        labeler=labeler,
     )
 
 
@@ -64,6 +141,7 @@ def cluster_chunks_by_embeddings(
     num_topics: int = 3,
     top_docs_per_topic: int = 3,
     max_iter: int = 30,
+    labeler: TopicLabeler | None = None,
 ) -> list[TopicCluster]:
     if num_topics <= 0:
         raise ValueError("num_topics must be > 0")
@@ -175,18 +253,21 @@ def cluster_chunks_by_embeddings(
     )
 
     topics: list[TopicCluster] = []
+    active_labeler = labeler or DeterministicTopicLabeler()
+    fallback_labeler = DeterministicTopicLabeler()
     for index, item in enumerate(ranked, start=1):
         representatives = item["representative_documents"]
-        lead_title = representatives[0].title if representatives else "未命名主题"
-        topics.append(
-            TopicCluster(
-                topic_id=f"topic-{index}",
-                label=f"主题{index}：{_shorten_label(lead_title)}",
-                chunk_count=int(item["chunk_count"]),
-                representative_chunk_ids=list(item["representative_chunk_ids"]),
-                representative_documents=list(representatives),
-            )
+        topic = TopicCluster(
+            topic_id=f"topic-{index}",
+            label="",
+            chunk_count=int(item["chunk_count"]),
+            representative_chunk_ids=list(item["representative_chunk_ids"]),
+            representative_documents=list(representatives),
         )
+        label = active_labeler.label_topic(topic=topic, topic_index=index).strip()
+        if not label:
+            label = fallback_labeler.label_topic(topic=topic, topic_index=index)
+        topics.append(replace(topic, label=label))
     return topics
 
 
@@ -256,3 +337,35 @@ def _shorten_label(title: str, limit: int = 18) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
+
+
+def _build_topic_label_prompts(*, topic: TopicCluster) -> tuple[str, str]:
+    system_prompt = (
+        "你是一个主题命名助手。请根据证据为聚类主题命名，"
+        "输出一个简短中文短语，不要编造。"
+    )
+    representative_lines = [
+        f"{index}. {item.title} | score={item.score:.4f}"
+        for index, item in enumerate(topic.representative_documents, start=1)
+    ]
+    user_prompt = (
+        f"topic_id: {topic.topic_id}\n"
+        f"chunk_count: {topic.chunk_count}\n"
+        "代表文档：\n"
+        + ("\n".join(representative_lines) if representative_lines else "(无)")
+        + "\n\n请只返回一个主题名（不超过12个字，不要解释）。"
+    )
+    return system_prompt, user_prompt
+
+
+def _extract_candidate_label(raw: str) -> str:
+    if not raw:
+        return ""
+    line = raw.splitlines()[0].strip().strip("`\"' ")
+    if not line:
+        return ""
+    if "：" in line and line.startswith("主题"):
+        line = line.split("：", maxsplit=1)[1].strip()
+    if ":" in line and line.lower().startswith("topic"):
+        line = line.split(":", maxsplit=1)[1].strip()
+    return line

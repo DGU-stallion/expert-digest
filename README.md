@@ -166,6 +166,13 @@ Cluster topics from local chunk embeddings:
 expert-digest cluster-topics --db data/processed/zhihu_huang.sqlite3 --num-topics 3 --top-docs 2
 ```
 
+Cluster topics with optional LLM naming (fallback to deterministic labels when
+LLM is unavailable or fails):
+
+```powershell
+expert-digest cluster-topics --db data/processed/zhihu_huang.sqlite3 --num-topics 3 --top-docs 2 --label-mode llm --format json
+```
+
 Run the M5 Streamlit demo (import/process/ask/handbook preview):
 
 ```powershell

@@ -4,6 +4,7 @@ from pathlib import Path
 from expert_digest.cli import main
 from expert_digest.domain.models import Handbook
 from expert_digest.knowledge.topic_clusterer import (
+    LLMTopicLabeler,
     TopicCluster,
     TopicRepresentativeDocument,
 )
@@ -97,3 +98,36 @@ def test_cli_generate_handbook_accepts_cluster_theme_options(monkeypatch, capsys
     assert exit_code == 0
     assert captured["theme_source"] == "cluster"
     assert captured["num_topics"] == 4
+
+
+def test_cli_cluster_topics_llm_mode_wires_labeler_and_metadata(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    class _FakeLLMClient:
+        provider = "nvidia"
+        model = "stepfun-ai/step-3.5-flash"
+        base_url = "https://integrate.api.nvidia.com"
+
+        def generate(self, *, system_prompt: str, user_prompt: str) -> str:
+            return "价值投资与风险控制"
+
+    def _fake_build_topic_clusters(**kwargs):
+        captured.update(kwargs)
+        return _fake_topics()
+
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: _FakeLLMClient(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.build_topic_clusters",
+        _fake_build_topic_clusters,
+    )
+
+    exit_code = main(["cluster-topics", "--label-mode", "llm", "--format", "json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert isinstance(captured["labeler"], LLMTopicLabeler)
+    assert payload["label_mode"] == "llm"
+    assert payload["llm_provider"] == "nvidia"

@@ -25,7 +25,12 @@ from expert_digest.generation.llm_client import (
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
-from expert_digest.knowledge.topic_clusterer import TopicCluster, build_topic_clusters
+from expert_digest.knowledge.topic_clusterer import (
+    DeterministicTopicLabeler,
+    LLMTopicLabeler,
+    TopicCluster,
+    build_topic_clusters,
+)
 from expert_digest.processing.cleaner import clean_document
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
@@ -229,14 +234,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "cluster-topics":
+        llm_client: AnthropicCompatibleClient | None = None
+        topic_labeler = DeterministicTopicLabeler()
+        if args.label_mode == "llm":
+            llm_client = create_default_handbook_llm_client(
+                ccswitch_db_path=args.ccswitch_db,
+                timeout_seconds=args.llm_timeout,
+                max_output_tokens=120,
+            )
+            topic_labeler = LLMTopicLabeler(llm_client=llm_client)
+
         topics = build_topic_clusters(
             db_path=args.db,
             model=args.model,
             num_topics=args.num_topics,
             top_docs_per_topic=args.top_docs,
             max_iter=args.max_iter,
+            labeler=topic_labeler,
         )
-        _emit_topic_clusters(topics=topics, output_format=args.format)
+        metadata_fn = getattr(topic_labeler, "runtime_metadata", None)
+        runtime: dict[str, object] = {}
+        if callable(metadata_fn):
+            raw = metadata_fn()
+            if isinstance(raw, dict):
+                runtime = raw
+        _emit_topic_clusters(
+            topics=topics,
+            output_format=args.format,
+            metadata={
+                "label_mode": args.label_mode,
+                "fallback_used": bool(runtime.get("fallback_used", False)),
+                "error_reason": runtime.get("error_reason"),
+                "llm_provider": getattr(llm_client, "provider", None),
+                "llm_model": getattr(llm_client, "model", None),
+            },
+        )
         return 0
 
     parser.print_help()
@@ -341,6 +373,17 @@ def _build_parser() -> argparse.ArgumentParser:
     cluster_parser.add_argument("--num-topics", type=int, default=3)
     cluster_parser.add_argument("--top-docs", type=int, default=3)
     cluster_parser.add_argument("--max-iter", type=int, default=30)
+    cluster_parser.add_argument(
+        "--label-mode",
+        choices=["deterministic", "llm"],
+        default="deterministic",
+    )
+    cluster_parser.add_argument(
+        "--ccswitch-db",
+        type=Path,
+        default=DEFAULT_CCSWITCH_DB_PATH,
+    )
+    cluster_parser.add_argument("--llm-timeout", type=int, default=20)
     cluster_parser.add_argument("--format", choices=["text", "json"], default="text")
 
     return parser
@@ -439,19 +482,24 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
     )
 
 
-def _emit_topic_clusters(*, topics: list[TopicCluster], output_format: str) -> None:
+def _emit_topic_clusters(
+    *,
+    topics: list[TopicCluster],
+    output_format: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    metadata = metadata or {}
     if output_format == "json":
-        print(
-            json.dumps(
-                {"topics": [asdict(topic) for topic in topics]},
-                ensure_ascii=False,
-            )
-        )
+        payload = {"topics": [asdict(topic) for topic in topics]}
+        payload.update(metadata)
+        print(json.dumps(payload, ensure_ascii=False))
         return
-    _print_topic_clusters(topics)
+    _print_topic_clusters(topics, metadata=metadata)
 
 
-def _print_topic_clusters(topics: list[TopicCluster]) -> None:
+def _print_topic_clusters(
+    topics: list[TopicCluster], *, metadata: dict[str, object] | None = None
+) -> None:
     if not topics:
         print("No topic clusters generated.")
         return
@@ -465,3 +513,10 @@ def _print_topic_clusters(topics: list[TopicCluster]) -> None:
                 f"- {doc_index}. score={document.score:.4f} "
                 f"{document.title} / {document.author}"
             )
+    if metadata and metadata.get("label_mode") == "llm":
+        print(
+            "Labeling metadata: "
+            f"fallback_used={metadata.get('fallback_used', False)} "
+            f"error_reason={metadata.get('error_reason')} "
+            f"provider={metadata.get('llm_provider')}"
+        )
