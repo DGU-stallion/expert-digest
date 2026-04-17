@@ -33,11 +33,9 @@ from expert_digest.processing.embedder import (
     embed_text,
 )
 from expert_digest.processing.splitter import split_documents
-from expert_digest.rag.answering import StructuredAnswer, build_structured_answer
-from expert_digest.retrieval.retriever import (
-    hydrate_scored_chunks,
-    rank_chunk_embeddings,
-)
+from expert_digest.rag.answering import StructuredAnswer
+from expert_digest.rag.query_service import answer_question
+from expert_digest.retrieval.retriever import rank_chunk_embeddings
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
     clear_chunk_embeddings,
@@ -174,43 +172,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "ask":
-        chunk_embeddings = list_chunk_embeddings(args.db, model=args.model)
-        min_top_score = (
-            args.min_top_score if args.min_top_score is not None else args.min_score
-        )
-        if not chunk_embeddings:
-            result = build_structured_answer(
-                question=args.query,
-                evidence_chunks=[],
-                max_evidence=args.max_evidence,
-                min_top_score=min_top_score,
-                min_avg_score=args.min_avg_score,
-            )
-            _emit_structured_answer(result, output_format=args.format)
-            return 0
-
-        query_vector = embed_text(
-            args.query,
-            dim=chunk_embeddings[0].dimensions,
-        )
-        ranked = rank_chunk_embeddings(
-            query_vector=query_vector,
-            chunk_embeddings=chunk_embeddings,
-            top_k=args.top_k,
-        )
-        chunks = {chunk.id: chunk for chunk in list_chunks(args.db)}
-        documents = {document.id: document for document in list_documents(args.db)}
-        evidence_chunks = hydrate_scored_chunks(
-            ranked,
-            chunks_by_id=chunks,
-            documents_by_id=documents,
-        )
-        result = build_structured_answer(
+        result = answer_question(
             question=args.query,
-            evidence_chunks=evidence_chunks,
-            max_evidence=args.max_evidence,
-            min_top_score=min_top_score,
+            db_path=args.db,
+            model=args.model,
+            top_k=args.top_k,
+            min_score=args.min_score,
+            min_top_score=args.min_top_score,
             min_avg_score=args.min_avg_score,
+            max_evidence=args.max_evidence,
         )
         _emit_structured_answer(result, output_format=args.format)
         return 0
