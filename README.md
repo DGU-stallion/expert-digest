@@ -161,6 +161,9 @@ python -m pip install -e ".[app]"
 streamlit run src/expert_digest/app/streamlit_app.py
 ```
 
+In the Streamlit "导入数据" page, JSONL supports direct file upload (with
+local path fallback).
+
 JSONL input uses one article per line:
 
 ```json

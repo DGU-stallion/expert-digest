@@ -55,13 +55,35 @@ def _render_import_page(*, st, db_path: Path) -> None:
         "markdown": "data/sample/markdown",
         "zhihu": "D:/Project/Zhihu_Crawler/data/zhihu/huang-wei-yan-30",
     }[kind]
-    source_path = st.text_input("来源路径", value=default_source)
+    uploaded_jsonl = None
+    source_label = "来源路径"
+    if kind == "jsonl":
+        uploaded_jsonl = st.file_uploader(
+            "上传 JSONL 文件",
+            type=["jsonl"],
+            accept_multiple_files=False,
+        )
+        st.caption("支持直接上传 JSONL。若同时填写路径，将优先使用上传文件。")
+        source_label = "本地 JSONL 路径（可选）"
+
+    source_path = st.text_input(source_label, value=default_source)
 
     if st.button("执行导入", type="primary", use_container_width=True):
+        if kind == "jsonl" and uploaded_jsonl is not None:
+            resolved_source_path = services.persist_uploaded_jsonl(
+                filename=uploaded_jsonl.name,
+                content=uploaded_jsonl.getvalue(),
+            )
+        elif source_path.strip():
+            resolved_source_path = Path(source_path.strip())
+        else:
+            st.warning("请上传文件或填写来源路径。")
+            return
+
         try:
             count = services.import_documents(
                 kind=kind,
-                source_path=Path(source_path),
+                source_path=resolved_source_path,
                 db_path=db_path,
             )
         except Exception as error:  # pragma: no cover

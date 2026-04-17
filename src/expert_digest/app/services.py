@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from expert_digest.domain.models import Handbook
 from expert_digest.generation.handbook_writer import (
@@ -52,6 +53,26 @@ class DataOverview:
 class HandbookResult:
     handbook: Handbook
     output_path: Path
+
+
+def persist_uploaded_jsonl(
+    *,
+    filename: str,
+    content: bytes,
+    upload_dir: str | Path = Path(".tmp/streamlit_uploads"),
+) -> Path:
+    normalized = Path(filename.strip()).name
+    if not normalized:
+        raise ValueError("filename must not be empty")
+
+    if not normalized.lower().endswith(".jsonl"):
+        normalized = f"{normalized}.jsonl"
+
+    target_dir = Path(upload_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{uuid4().hex}_{normalized}"
+    target_path.write_bytes(content)
+    return target_path
 
 
 def collect_data_overview(

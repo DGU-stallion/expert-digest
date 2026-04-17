@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -6,6 +7,7 @@ from expert_digest.app.services import (
     collect_data_overview,
     generate_handbook,
     import_documents,
+    persist_uploaded_jsonl,
 )
 from expert_digest.domain.models import Chunk, ChunkEmbedding, Document, Handbook
 
@@ -168,4 +170,38 @@ def test_generate_handbook_rejects_unsupported_synthesis_mode():
             max_themes=3,
             output_path=Path("data/outputs/handbook.md"),
             synthesis_mode="custom",
+        )
+
+
+def test_persist_uploaded_jsonl_writes_uploaded_content():
+    upload_dir = Path(".tmp") / f"test_uploaded_jsonl_{uuid4().hex}"
+    payload = (
+        '{"author":"测试作者","title":"测试标题","content":"测试内容","source":"sample"}\n'
+    ).encode()
+    saved_path = persist_uploaded_jsonl(
+        filename="sample_upload.jsonl",
+        content=payload,
+        upload_dir=upload_dir,
+    )
+    assert saved_path.exists()
+    assert saved_path.parent == upload_dir
+    assert saved_path.read_bytes() == payload
+
+
+def test_persist_uploaded_jsonl_sanitizes_filename_and_rejects_empty_name():
+    upload_dir = Path(".tmp") / f"test_uploaded_jsonl_name_{uuid4().hex}"
+    payload = b'{"author":"a","title":"t","content":"c","source":"s"}\n'
+    saved_path = persist_uploaded_jsonl(
+        filename="..\\unsafe.jsonl",
+        content=payload,
+        upload_dir=upload_dir,
+    )
+    assert saved_path.parent == upload_dir
+    assert ".." not in saved_path.name
+
+    with pytest.raises(ValueError, match="filename must not be empty"):
+        persist_uploaded_jsonl(
+            filename="  ",
+            content=payload,
+            upload_dir=upload_dir,
         )
