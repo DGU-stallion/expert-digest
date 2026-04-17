@@ -15,6 +15,9 @@ This repository currently includes:
   policy for low-confidence/no-evidence questions.
 - M4 handbook generation: hybrid (LLM + deterministic fallback) handbook
   generation with JSON observability metadata export.
+- M5 streamlit demo: import/process/ask/handbook flow for local walkthrough.
+- M6 topic clustering enhancement: cluster output, report metrics, and topic
+  naming strategy (deterministic + optional LLM fallback).
 
 ## Requirements
 
@@ -136,6 +139,12 @@ Generate handbook (hybrid mode, default):
 expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --output data/outputs/handbook.md
 ```
 
+Generate handbook organized by clustered topics:
+
+```powershell
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --theme-source cluster --num-topics 4
+```
+
 Generate handbook as JSON result (with runtime metadata):
 
 ```powershell
@@ -152,6 +161,25 @@ Force deterministic mode (no LLM):
 
 ```powershell
 expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --synthesis-mode deterministic
+```
+
+Cluster topics from local chunk embeddings:
+
+```powershell
+expert-digest cluster-topics --db data/processed/zhihu_huang.sqlite3 --num-topics 3 --top-docs 2
+```
+
+Cluster topics with optional LLM naming (fallback to deterministic labels when
+LLM is unavailable or fails):
+
+```powershell
+expert-digest cluster-topics --db data/processed/zhihu_huang.sqlite3 --num-topics 3 --top-docs 2 --label-mode llm --format json
+```
+
+Export cluster report artifact (topic distribution + similarity proxy metrics):
+
+```powershell
+expert-digest cluster-topics --db data/processed/zhihu_huang.sqlite3 --num-topics 3 --top-docs 2 --format json --report-output data/outputs/topic_report.json
 ```
 
 Run the M5 Streamlit demo (import/process/ask/handbook preview):

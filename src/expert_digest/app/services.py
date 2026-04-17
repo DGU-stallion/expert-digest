@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,6 +21,18 @@ from expert_digest.generation.llm_client import (
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
+from expert_digest.knowledge.author_profile import build_author_profile
+from expert_digest.knowledge.skill_writer import (
+    build_skill_markdown_from_profile,
+    render_skill_filename,
+)
+from expert_digest.knowledge.topic_clusterer import (
+    DeterministicTopicLabeler,
+    LLMTopicLabeler,
+    TopicCluster,
+    build_topic_clusters,
+)
+from expert_digest.knowledge.topic_report import TopicReport, build_topic_report
 from expert_digest.processing.cleaner import clean_document
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
@@ -52,6 +65,26 @@ class DataOverview:
 @dataclass(frozen=True)
 class HandbookResult:
     handbook: Handbook
+    output_path: Path
+
+
+@dataclass(frozen=True)
+class TopicClusterResult:
+    topics: list[TopicCluster]
+    report: TopicReport
+    report_output: Path | None
+
+
+@dataclass(frozen=True)
+class AuthorProfileResult:
+    profile: dict[str, object]
+    output_path: Path | None
+
+
+@dataclass(frozen=True)
+class SkillDraftResult:
+    profile: dict[str, object]
+    markdown: str
     output_path: Path
 
 
@@ -172,6 +205,8 @@ def generate_handbook(
     max_themes: int,
     output_path: str | Path,
     synthesis_mode: str = "hybrid",
+    theme_source: str = "preset",
+    num_topics: int = 3,
     ccswitch_db_path: str | Path = DEFAULT_CCSWITCH_DB_PATH,
     llm_timeout: int = 30,
     llm_max_tokens: int = 700,
@@ -195,7 +230,125 @@ def generate_handbook(
         model=model,
         top_k=top_k,
         max_themes=max_themes,
+        theme_source=theme_source,
+        num_topics=num_topics,
         synthesizer=synthesizer,
     )
     resolved_output_path = write_handbook(handbook=handbook, output_path=output_path)
     return HandbookResult(handbook=handbook, output_path=resolved_output_path)
+
+
+def cluster_topics(
+    *,
+    db_path: str | Path,
+    model: str = DEFAULT_EMBEDDING_MODEL,
+    num_topics: int = 3,
+    top_docs: int = 3,
+    max_iter: int = 30,
+    label_mode: str = "deterministic",
+    ccswitch_db_path: str | Path = DEFAULT_CCSWITCH_DB_PATH,
+    llm_timeout: int = 20,
+    report_output: str | Path | None = None,
+) -> TopicClusterResult:
+    if label_mode not in {"deterministic", "llm"}:
+        raise ValueError(f"unsupported label_mode: {label_mode}")
+
+    llm_client = None
+    labeler = DeterministicTopicLabeler()
+    if label_mode == "llm":
+        llm_client = create_default_handbook_llm_client(
+            ccswitch_db_path=ccswitch_db_path,
+            timeout_seconds=llm_timeout,
+            max_output_tokens=120,
+        )
+        labeler = LLMTopicLabeler(llm_client=llm_client)
+
+    topics = build_topic_clusters(
+        db_path=db_path,
+        model=model,
+        num_topics=num_topics,
+        top_docs_per_topic=top_docs,
+        max_iter=max_iter,
+        labeler=labeler,
+    )
+    embeddings = list_chunk_embeddings(db_path, model=model)
+    report = build_topic_report(
+        topics=topics,
+        chunk_embeddings=embeddings,
+        model=model,
+    )
+
+    resolved_output: Path | None = None
+    if report_output is not None:
+        resolved_output = Path(report_output)
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "topics": [asdict(topic) for topic in topics],
+            "report": asdict(report),
+            "label_mode": label_mode,
+            "llm_provider": getattr(llm_client, "provider", None),
+            "llm_model": getattr(llm_client, "model", None),
+        }
+        resolved_output.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    return TopicClusterResult(
+        topics=topics,
+        report=report,
+        report_output=resolved_output,
+    )
+
+
+def build_author_profile_snapshot(
+    *,
+    db_path: str | Path,
+    author: str | None = None,
+    max_topics: int = 6,
+    max_keywords: int = 12,
+    max_patterns: int = 5,
+    output_path: str | Path | None = None,
+) -> AuthorProfileResult:
+    profile = build_author_profile(
+        db_path=db_path,
+        author=author,
+        max_topics=max_topics,
+        max_keywords=max_keywords,
+        max_patterns=max_patterns,
+    )
+    payload = profile if isinstance(profile, dict) else asdict(profile)
+
+    resolved_output: Path | None = None
+    if output_path is not None:
+        resolved_output = Path(output_path)
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        resolved_output.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return AuthorProfileResult(profile=payload, output_path=resolved_output)
+
+
+def generate_skill_draft(
+    *,
+    db_path: str | Path,
+    author: str | None = None,
+    output_path: str | Path | None = None,
+) -> SkillDraftResult:
+    profile = build_author_profile(
+        db_path=db_path,
+        author=author,
+    )
+    payload = profile if isinstance(profile, dict) else asdict(profile)
+    markdown = build_skill_markdown_from_profile(payload)
+    resolved_output = Path(output_path) if output_path is not None else Path(
+        "data/outputs"
+    ) / render_skill_filename(author=str(payload.get("author", "author")))
+    resolved_output.parent.mkdir(parents=True, exist_ok=True)
+    resolved_output.write_text(markdown, encoding="utf-8")
+    return SkillDraftResult(
+        profile=payload,
+        markdown=markdown,
+        output_path=resolved_output,
+    )

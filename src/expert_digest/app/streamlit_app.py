@@ -1,4 +1,4 @@
-"""Streamlit demo app for ExpertDigest M5."""
+"""Streamlit demo app for ExpertDigest M7."""
 
 from __future__ import annotations
 
@@ -25,15 +25,15 @@ def _load_streamlit():
 
 def run() -> None:
     st = _load_streamlit()
-    st.set_page_config(page_title="ExpertDigest M5 Demo", layout="wide")
-    st.title("ExpertDigest M5 - Streamlit Demo")
-    st.caption("基础闭环：导入 -> 处理 -> 问答 -> 手册预览")
+    st.set_page_config(page_title="ExpertDigest M7 Demo", layout="wide")
+    st.title("ExpertDigest M7 - Streamlit Demo")
+    st.caption("基础闭环 + 主题聚类 + 作者画像/Skill 蒸馏")
 
     db_path_raw = st.sidebar.text_input("数据库路径", value=str(DEFAULT_DATABASE_PATH))
     model = st.sidebar.text_input("Embedding 模型", value=DEFAULT_EMBEDDING_MODEL)
     page = st.sidebar.radio(
         "页面",
-        ("导入数据", "处理数据", "问答检索", "手册预览"),
+        ("导入数据", "处理数据", "问答检索", "手册预览", "画像与Skill"),
     )
     db_path = Path(db_path_raw.strip() or DEFAULT_DATABASE_PATH)
 
@@ -43,8 +43,10 @@ def run() -> None:
         _render_process_page(st=st, db_path=db_path, model=model)
     elif page == "问答检索":
         _render_ask_page(st=st, db_path=db_path, model=model)
-    else:
+    elif page == "手册预览":
         _render_handbook_page(st=st, db_path=db_path, model=model)
+    else:
+        _render_profile_skill_page(st=st, db_path=db_path)
 
 
 def _render_import_page(*, st, db_path: Path) -> None:
@@ -152,6 +154,136 @@ def _render_process_page(*, st, db_path: Path, model: str) -> None:
             else:
                 st.success(f"rebuild-embeddings 完成：{count} 条 embedding")
 
+    _render_topic_cluster_block(st=st, db_path=db_path, model=model)
+
+
+def _render_topic_cluster_block(*, st, db_path: Path, model: str) -> None:
+    st.markdown("---")
+    st.subheader("M6 主题聚类概览")
+    num_topics = st.slider(
+        "num_topics",
+        min_value=1,
+        max_value=10,
+        value=3,
+        key="cluster_num_topics",
+    )
+    top_docs = st.slider(
+        "top_docs_per_topic",
+        min_value=1,
+        max_value=5,
+        value=2,
+        key="cluster_top_docs",
+    )
+    max_iter = st.slider(
+        "max_iter",
+        min_value=10,
+        max_value=100,
+        value=30,
+        key="cluster_max_iter",
+    )
+    label_mode = st.selectbox(
+        "topic 标签模式",
+        options=["deterministic", "llm"],
+        index=0,
+        key="cluster_label_mode",
+    )
+    report_output = st.text_input(
+        "聚类报告输出路径（可选）",
+        value="data/outputs/topic_report.json",
+        key="cluster_report_output",
+    )
+    with st.expander("LLM 命名参数（可选）", expanded=False):
+        ccswitch_db = st.text_input(
+            "ccswitch_db_path (cluster)",
+            value=str(DEFAULT_CCSWITCH_DB_PATH),
+            key="cluster_ccswitch_db",
+        )
+        llm_timeout = st.number_input(
+            "llm_timeout (cluster)",
+            min_value=5,
+            max_value=60,
+            value=20,
+            step=1,
+            key="cluster_llm_timeout",
+        )
+
+    if st.button("生成主题聚类报告", type="primary", use_container_width=True):
+        try:
+            result = services.cluster_topics(
+                db_path=db_path,
+                model=model,
+                num_topics=num_topics,
+                top_docs=top_docs,
+                max_iter=max_iter,
+                label_mode=label_mode,
+                ccswitch_db_path=Path(ccswitch_db),
+                llm_timeout=int(llm_timeout),
+                report_output=Path(report_output.strip())
+                if report_output.strip()
+                else None,
+            )
+        except Exception as error:  # pragma: no cover
+            st.error(f"主题聚类失败: {error}")
+            return
+
+        report = result.report
+        metric_columns = st.columns(4)
+        metric_columns[0].metric("topic_count", report.topic_count)
+        metric_columns[1].metric("total_chunks", report.total_chunks)
+        metric_columns[2].metric(
+            "largest_topic_ratio",
+            f"{report.largest_topic_ratio:.4f}",
+        )
+        mean_intra = (
+            f"{report.mean_intra_similarity_proxy:.4f}"
+            if report.mean_intra_similarity_proxy is not None
+            else "(无)"
+        )
+        metric_columns[3].metric("mean_intra_proxy", mean_intra)
+
+        if result.topics:
+            st.markdown("#### 主题分布")
+            st.bar_chart({topic.label: topic.chunk_count for topic in result.topics})
+
+            st.markdown("#### 主题摘要")
+            st.table(
+                [
+                    {
+                        "topic": item.label,
+                        "chunks": item.chunk_count,
+                        "rep_docs": item.representative_document_count,
+                        "mean_rep_score": (
+                            f"{item.mean_representative_score:.4f}"
+                            if item.mean_representative_score is not None
+                            else "(无)"
+                        ),
+                    }
+                    for item in report.topics
+                ]
+            )
+
+            representative_rows: list[dict[str, str]] = []
+            for topic in result.topics:
+                for document in topic.representative_documents:
+                    representative_rows.append(
+                        {
+                            "topic": topic.label,
+                            "title": document.title,
+                            "author": document.author,
+                            "score": f"{document.score:.4f}",
+                        }
+                    )
+            st.markdown("#### 代表原文")
+            if representative_rows:
+                st.table(representative_rows)
+            else:
+                st.write("(无)")
+        else:
+            st.info("当前没有可用主题（请先确认 embeddings 是否已构建）。")
+
+        if result.report_output is not None:
+            st.success(f"聚类报告已导出：{result.report_output}")
+
 
 def _render_ask_page(*, st, db_path: Path, model: str) -> None:
     st.subheader("问答检索")
@@ -229,6 +361,15 @@ def _render_ask_page(*, st, db_path: Path, model: str) -> None:
 def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
     st.subheader("手册预览")
     author = st.text_input("作者过滤（可选）", value="")
+    theme_source = st.selectbox(
+        "主题组织方式",
+        options=["preset", "cluster"],
+        index=0,
+    )
+    if theme_source == "cluster":
+        num_topics = st.slider("num_topics", min_value=1, max_value=10, value=3)
+    else:
+        num_topics = 3
     top_k = st.slider("theme top_k", min_value=1, max_value=10, value=3)
     max_themes = st.slider("max_themes", min_value=1, max_value=8, value=3)
     synthesis_mode = st.selectbox(
@@ -264,6 +405,8 @@ def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
                 max_themes=max_themes,
                 output_path=Path(output_path),
                 synthesis_mode=synthesis_mode,
+                theme_source=theme_source,
+                num_topics=num_topics,
                 ccswitch_db_path=Path(ccswitch_db),
                 llm_timeout=int(llm_timeout),
                 llm_max_tokens=int(llm_max_tokens),
@@ -275,6 +418,76 @@ def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
         st.success(f"手册已生成：{result.output_path}")
         st.markdown("### 预览")
         st.markdown(result.handbook.markdown)
+
+
+def _render_profile_skill_page(*, st, db_path: Path) -> None:
+    st.subheader("M7 作者画像与 Skill 草稿")
+    author = st.text_input("作者过滤（可选）", value="", key="profile_author")
+    profile_output = st.text_input(
+        "画像导出路径（可选）",
+        value="data/outputs/author_profile_from_streamlit.json",
+        key="profile_output",
+    )
+
+    if st.button("生成作者画像", type="primary", use_container_width=True):
+        try:
+            profile_result = services.build_author_profile_snapshot(
+                db_path=db_path,
+                author=author.strip() or None,
+                output_path=Path(profile_output.strip())
+                if profile_output.strip()
+                else None,
+            )
+        except Exception as error:  # pragma: no cover
+            st.error(f"生成作者画像失败: {error}")
+            return
+
+        st.success("作者画像已生成")
+        if profile_result.output_path is not None:
+            st.caption(f"画像已导出：{profile_result.output_path}")
+
+        profile = profile_result.profile
+        metric_columns = st.columns(3)
+        metric_columns[0].metric("author", str(profile.get("author", "(无)")))
+        metric_columns[1].metric(
+            "document_count",
+            int(profile.get("document_count", 0)),
+        )
+        metric_columns[2].metric(
+            "source_documents",
+            len(profile.get("source_document_ids", [])),
+        )
+        st.markdown("#### Focus Topics")
+        st.write(profile.get("focus_topics", []))
+        st.markdown("#### Keywords")
+        st.table(profile.get("keywords", []))
+        st.markdown("#### Reasoning Patterns")
+        st.table(profile.get("reasoning_patterns", []))
+
+    st.markdown("---")
+    skill_output = st.text_input(
+        "Skill 草稿输出路径（可选）",
+        value="data/outputs/author_skill_from_streamlit.md",
+        key="skill_output",
+    )
+
+    if st.button("生成 Skill 草稿", use_container_width=True):
+        try:
+            result = services.generate_skill_draft(
+                db_path=db_path,
+                author=author.strip() or None,
+                output_path=(
+                    Path(skill_output.strip()) if skill_output.strip() else None
+                ),
+            )
+        except Exception as error:  # pragma: no cover
+            st.error(f"生成 Skill 草稿失败: {error}")
+            return
+
+        st.success(f"Skill 草稿已生成：{result.output_path}")
+        st.caption("注意：事实性结论仍必须通过 RAG 检索证据提供。")
+        st.markdown("### SKILL.md 预览")
+        st.code(result.markdown, language="markdown")
 
 
 if __name__ == "__main__":

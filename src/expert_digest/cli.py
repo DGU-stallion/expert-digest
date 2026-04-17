@@ -25,6 +25,18 @@ from expert_digest.generation.llm_client import (
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
+from expert_digest.knowledge.author_profile import build_author_profile
+from expert_digest.knowledge.skill_writer import (
+    build_skill_markdown_from_profile,
+    render_skill_filename,
+)
+from expert_digest.knowledge.topic_clusterer import (
+    DeterministicTopicLabeler,
+    LLMTopicLabeler,
+    TopicCluster,
+    build_topic_clusters,
+)
+from expert_digest.knowledge.topic_report import build_topic_report
 from expert_digest.processing.cleaner import clean_document
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
@@ -204,6 +216,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model=args.model,
                 top_k=args.top_k,
                 max_themes=args.max_themes,
+                theme_source=args.theme_source,
+                num_topics=args.num_topics,
                 synthesizer=synthesizer,
             )
             output_path = write_handbook(handbook=handbook, output_path=args.output)
@@ -223,6 +237,95 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if args.save_run_metadata is not None:
             _save_run_metadata(payload=payload, output_path=args.save_run_metadata)
+        return 0
+
+    if args.command == "cluster-topics":
+        llm_client: AnthropicCompatibleClient | None = None
+        topic_labeler = DeterministicTopicLabeler()
+        if args.label_mode == "llm":
+            llm_client = create_default_handbook_llm_client(
+                ccswitch_db_path=args.ccswitch_db,
+                timeout_seconds=args.llm_timeout,
+                max_output_tokens=120,
+            )
+            topic_labeler = LLMTopicLabeler(llm_client=llm_client)
+
+        topics = build_topic_clusters(
+            db_path=args.db,
+            model=args.model,
+            num_topics=args.num_topics,
+            top_docs_per_topic=args.top_docs,
+            max_iter=args.max_iter,
+            labeler=topic_labeler,
+        )
+        chunk_embeddings = list_chunk_embeddings(args.db, model=args.model)
+        report = build_topic_report(
+            topics=topics,
+            chunk_embeddings=chunk_embeddings,
+            model=args.model,
+        )
+        metadata_fn = getattr(topic_labeler, "runtime_metadata", None)
+        runtime: dict[str, object] = {}
+        if callable(metadata_fn):
+            raw = metadata_fn()
+            if isinstance(raw, dict):
+                runtime = raw
+        payload = {
+            "topics": [asdict(topic) for topic in topics],
+            "report": asdict(report),
+            "label_mode": args.label_mode,
+            "fallback_used": bool(runtime.get("fallback_used", False)),
+            "error_reason": runtime.get("error_reason"),
+            "llm_provider": getattr(llm_client, "provider", None),
+            "llm_model": getattr(llm_client, "model", None),
+        }
+        if args.report_output is not None:
+            _save_run_metadata(payload=payload, output_path=args.report_output)
+        _emit_topic_clusters(
+            topics=topics,
+            output_format=args.format,
+            metadata={
+                key: value for key, value in payload.items() if key != "topics"
+            },
+        )
+        return 0
+
+    if args.command == "build-author-profile":
+        try:
+            profile = build_author_profile(
+                db_path=args.db,
+                author=args.author,
+                max_topics=args.max_topics,
+                max_keywords=args.max_keywords,
+                max_patterns=args.max_patterns,
+            )
+        except ValueError as error:
+            print(f"Failed to build author profile: {error}")
+            return 1
+        payload = _emit_author_profile(profile=profile, output_format=args.format)
+        if args.output is not None:
+            _save_run_metadata(payload=payload, output_path=args.output)
+        return 0
+
+    if args.command == "generate-skill-draft":
+        try:
+            profile = build_author_profile(
+                db_path=args.db,
+                author=args.author,
+            )
+        except ValueError as error:
+            print(f"Failed to generate skill draft: {error}")
+            return 1
+        payload = profile if isinstance(profile, dict) else asdict(profile)
+        markdown = build_skill_markdown_from_profile(payload)
+        output_path = args.output
+        if output_path is None:
+            output_path = Path("data/outputs") / render_skill_filename(
+                author=str(payload.get("author", "author"))
+            )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown, encoding="utf-8")
+        print(f"Generated skill draft: {output_path}")
         return 0
 
     parser.print_help()
@@ -296,6 +399,12 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser.add_argument("--top-k", type=int, default=3)
     handbook_parser.add_argument("--max-themes", type=int, default=3)
     handbook_parser.add_argument(
+        "--theme-source",
+        choices=["preset", "cluster"],
+        default="preset",
+    )
+    handbook_parser.add_argument("--num-topics", type=int, default=3)
+    handbook_parser.add_argument(
         "--output",
         type=Path,
         default=Path("data/outputs/handbook.md"),
@@ -314,6 +423,40 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
     handbook_parser.add_argument("--format", choices=["text", "json"], default="text")
     handbook_parser.add_argument("--save-run-metadata", type=Path, default=None)
+
+    cluster_parser = subparsers.add_parser("cluster-topics")
+    cluster_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    cluster_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
+    cluster_parser.add_argument("--num-topics", type=int, default=3)
+    cluster_parser.add_argument("--top-docs", type=int, default=3)
+    cluster_parser.add_argument("--max-iter", type=int, default=30)
+    cluster_parser.add_argument(
+        "--label-mode",
+        choices=["deterministic", "llm"],
+        default="deterministic",
+    )
+    cluster_parser.add_argument(
+        "--ccswitch-db",
+        type=Path,
+        default=DEFAULT_CCSWITCH_DB_PATH,
+    )
+    cluster_parser.add_argument("--llm-timeout", type=int, default=20)
+    cluster_parser.add_argument("--report-output", type=Path, default=None)
+    cluster_parser.add_argument("--format", choices=["text", "json"], default="text")
+
+    profile_parser = subparsers.add_parser("build-author-profile")
+    profile_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    profile_parser.add_argument("--author")
+    profile_parser.add_argument("--max-topics", type=int, default=6)
+    profile_parser.add_argument("--max-keywords", type=int, default=12)
+    profile_parser.add_argument("--max-patterns", type=int, default=5)
+    profile_parser.add_argument("--output", type=Path, default=None)
+    profile_parser.add_argument("--format", choices=["text", "json"], default="text")
+
+    skill_parser = subparsers.add_parser("generate-skill-draft")
+    skill_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    skill_parser.add_argument("--author")
+    skill_parser.add_argument("--output", type=Path, default=None)
 
     return parser
 
@@ -409,3 +552,95 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _emit_topic_clusters(
+    *,
+    topics: list[TopicCluster],
+    output_format: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    metadata = metadata or {}
+    if output_format == "json":
+        payload = {"topics": [asdict(topic) for topic in topics]}
+        payload.update(metadata)
+        print(json.dumps(payload, ensure_ascii=False))
+        return
+    _print_topic_clusters(topics, metadata=metadata)
+
+
+def _emit_author_profile(*, profile: object, output_format: str) -> dict[str, object]:
+    payload = profile if isinstance(profile, dict) else asdict(profile)
+    if output_format == "json":
+        print(json.dumps(payload, ensure_ascii=False))
+        return payload
+    _print_author_profile(payload)
+    return payload
+
+
+def _print_author_profile(profile: dict[str, object]) -> None:
+    print(
+        f"Author profile for {profile.get('author')}: "
+        f"documents={profile.get('document_count')}"
+    )
+    focus_topics = profile.get("focus_topics", [])
+    if isinstance(focus_topics, list):
+        focus_topics_text = (
+            ", ".join(str(item) for item in focus_topics) if focus_topics else "(无)"
+        )
+        print(
+            "Focus topics: "
+            + focus_topics_text
+        )
+    keywords = profile.get("keywords", [])
+    if isinstance(keywords, list):
+        print("Top keywords:")
+        if not keywords:
+            print("- (无)")
+        else:
+            for item in keywords:
+                if isinstance(item, dict):
+                    print(f"- {item.get('keyword')} ({item.get('count')})")
+    patterns = profile.get("reasoning_patterns", [])
+    if isinstance(patterns, list):
+        print("Reasoning patterns:")
+        if not patterns:
+            print("- (无)")
+        else:
+            for item in patterns:
+                if isinstance(item, dict):
+                    print(f"- {item.get('pattern')} ({item.get('count')})")
+
+
+def _print_topic_clusters(
+    topics: list[TopicCluster], *, metadata: dict[str, object] | None = None
+) -> None:
+    if not topics:
+        print("No topic clusters generated.")
+        return
+    for index, topic in enumerate(topics, start=1):
+        print(f"Topic {index}: {topic.label} (chunks={topic.chunk_count})")
+        if not topic.representative_documents:
+            print("- representative docs: (无)")
+            continue
+        for doc_index, document in enumerate(topic.representative_documents, start=1):
+            print(
+                f"- {doc_index}. score={document.score:.4f} "
+                f"{document.title} / {document.author}"
+            )
+    report = metadata.get("report")
+    if isinstance(report, dict):
+        print(
+            "Report: "
+            f"topic_count={report.get('topic_count')} "
+            f"largest_topic_ratio={report.get('largest_topic_ratio')} "
+            f"mean_intra={report.get('mean_intra_similarity_proxy')} "
+            f"mean_inter={report.get('mean_inter_topic_similarity_proxy')}"
+        )
+    if metadata and metadata.get("label_mode") == "llm":
+        print(
+            "Labeling metadata: "
+            f"fallback_used={metadata.get('fallback_used', False)} "
+            f"error_reason={metadata.get('error_reason')} "
+            f"provider={metadata.get('llm_provider')}"
+        )
