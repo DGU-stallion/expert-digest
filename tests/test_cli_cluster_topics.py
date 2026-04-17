@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from expert_digest.cli import main
-from expert_digest.domain.models import Handbook
+from expert_digest.domain.models import ChunkEmbedding, Handbook
 from expert_digest.knowledge.topic_clusterer import (
     LLMTopicLabeler,
     TopicCluster,
@@ -31,10 +31,24 @@ def _fake_topics() -> list[TopicCluster]:
     ]
 
 
+def _fake_embeddings():
+    return [
+        ChunkEmbedding.create(
+            chunk_id="c1",
+            model="hash-bow-v1",
+            vector=[1.0, 0.0],
+        )
+    ]
+
+
 def test_cli_cluster_topics_supports_text_output(monkeypatch, capsys):
     monkeypatch.setattr(
         "expert_digest.cli.build_topic_clusters",
         lambda **_kwargs: _fake_topics(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: _fake_embeddings(),
     )
 
     exit_code = main(["cluster-topics"])
@@ -49,6 +63,10 @@ def test_cli_cluster_topics_supports_json_output(monkeypatch, capsys):
     monkeypatch.setattr(
         "expert_digest.cli.build_topic_clusters",
         lambda **_kwargs: _fake_topics(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: _fake_embeddings(),
     )
 
     exit_code = main(["cluster-topics", "--format", "json"])
@@ -123,6 +141,10 @@ def test_cli_cluster_topics_llm_mode_wires_labeler_and_metadata(monkeypatch, cap
         "expert_digest.cli.build_topic_clusters",
         _fake_build_topic_clusters,
     )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: _fake_embeddings(),
+    )
 
     exit_code = main(["cluster-topics", "--label-mode", "llm", "--format", "json"])
     payload = json.loads(capsys.readouterr().out)
@@ -131,3 +153,38 @@ def test_cli_cluster_topics_llm_mode_wires_labeler_and_metadata(monkeypatch, cap
     assert isinstance(captured["labeler"], LLMTopicLabeler)
     assert payload["label_mode"] == "llm"
     assert payload["llm_provider"] == "nvidia"
+
+
+def test_cli_cluster_topics_can_save_report_payload(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "expert_digest.cli.build_topic_clusters",
+        lambda **_kwargs: _fake_topics(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.list_chunk_embeddings",
+        lambda *_a, **_k: _fake_embeddings(),
+    )
+
+    def _fake_save_run_metadata(*, payload, output_path):
+        captured["payload"] = payload
+        captured["output_path"] = output_path
+
+    monkeypatch.setattr("expert_digest.cli._save_run_metadata", _fake_save_run_metadata)
+
+    exit_code = main(
+        [
+            "cluster-topics",
+            "--format",
+            "json",
+            "--report-output",
+            "data/outputs/topic_report.json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert "report" in payload
+    assert payload["report"]["topic_count"] == 1
+    assert captured["output_path"] == Path("data/outputs/topic_report.json")

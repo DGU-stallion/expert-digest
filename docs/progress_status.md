@@ -8,7 +8,7 @@
 - M3 `baseline rag`: completed
 - M4 `handbook generation`: completed
 - M5 `streamlit demo`: completed
-- M6 `topic clustering enhancement`: in progress
+- M6 `topic clustering enhancement`: completed
 
 ## Completed Capabilities
 
@@ -32,6 +32,8 @@
 18. M6 topic clustering command (`cluster-topics`) with representative documents
 19. Handbook can organize sections by clustered topics (`--theme-source cluster`)
 20. Topic naming strategy supports deterministic/LLM modes (`cluster-topics --label-mode`)
+21. Topic cluster evaluation report with proxy metrics (`--report-output`)
+22. Streamlit process page supports topic distribution and representative-doc visualization
 
 ## Live Data Integration
 
@@ -56,16 +58,16 @@ Current data snapshot:
 3. Trigger processing and run ask loop in demo: pass
 4. Preview generated handbook in UI: pass
 
-## M6 Current Checkpoint
+## M6 Exit Criteria Check
 
 1. Clustering can generate topic list: pass
 2. Each topic contains representative documents: pass
 3. Handbook can be organized by topics: pass
 4. Optional LLM naming path exists and fail-closed fallback works: pass
-5. Cluster quality evaluation metrics/report output: not started
+5. Cluster quality evaluation metrics/report output: pass
 
-## Next Recommended Steps (M6)
+## Next Recommended Steps (M7)
 
-1. Add lightweight cluster evaluation metrics (e.g., silhouette-like proxy or intra/inter similarity stats).
-2. Export a clustering report artifact for course presentation (`data/outputs/topic_report.json/md`).
-3. Add one Streamlit visualization block for topic distribution and representative docs.
+1. Add author profile baseline generation (关注主题/概念/方法模板).
+2. Add `generate-skill` command skeleton (规则+拒答+引用约束，不保存原文事实).
+3. Keep RAG as factual source of truth and wire profile/skill output to existing handbook metadata.

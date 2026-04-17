@@ -31,6 +31,7 @@ from expert_digest.knowledge.topic_clusterer import (
     TopicCluster,
     build_topic_clusters,
 )
+from expert_digest.knowledge.topic_report import build_topic_report
 from expert_digest.processing.cleaner import clean_document
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
@@ -252,21 +253,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_iter=args.max_iter,
             labeler=topic_labeler,
         )
+        chunk_embeddings = list_chunk_embeddings(args.db, model=args.model)
+        report = build_topic_report(
+            topics=topics,
+            chunk_embeddings=chunk_embeddings,
+            model=args.model,
+        )
         metadata_fn = getattr(topic_labeler, "runtime_metadata", None)
         runtime: dict[str, object] = {}
         if callable(metadata_fn):
             raw = metadata_fn()
             if isinstance(raw, dict):
                 runtime = raw
+        payload = {
+            "topics": [asdict(topic) for topic in topics],
+            "report": asdict(report),
+            "label_mode": args.label_mode,
+            "fallback_used": bool(runtime.get("fallback_used", False)),
+            "error_reason": runtime.get("error_reason"),
+            "llm_provider": getattr(llm_client, "provider", None),
+            "llm_model": getattr(llm_client, "model", None),
+        }
+        if args.report_output is not None:
+            _save_run_metadata(payload=payload, output_path=args.report_output)
         _emit_topic_clusters(
             topics=topics,
             output_format=args.format,
             metadata={
-                "label_mode": args.label_mode,
-                "fallback_used": bool(runtime.get("fallback_used", False)),
-                "error_reason": runtime.get("error_reason"),
-                "llm_provider": getattr(llm_client, "provider", None),
-                "llm_model": getattr(llm_client, "model", None),
+                key: value for key, value in payload.items() if key != "topics"
             },
         )
         return 0
@@ -384,6 +398,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CCSWITCH_DB_PATH,
     )
     cluster_parser.add_argument("--llm-timeout", type=int, default=20)
+    cluster_parser.add_argument("--report-output", type=Path, default=None)
     cluster_parser.add_argument("--format", choices=["text", "json"], default="text")
 
     return parser
@@ -513,6 +528,15 @@ def _print_topic_clusters(
                 f"- {doc_index}. score={document.score:.4f} "
                 f"{document.title} / {document.author}"
             )
+    report = metadata.get("report")
+    if isinstance(report, dict):
+        print(
+            "Report: "
+            f"topic_count={report.get('topic_count')} "
+            f"largest_topic_ratio={report.get('largest_topic_ratio')} "
+            f"mean_intra={report.get('mean_intra_similarity_proxy')} "
+            f"mean_inter={report.get('mean_inter_topic_similarity_proxy')}"
+        )
     if metadata and metadata.get("label_mode") == "llm":
         print(
             "Labeling metadata: "

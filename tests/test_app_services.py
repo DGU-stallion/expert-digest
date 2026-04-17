@@ -4,12 +4,14 @@ from uuid import uuid4
 import pytest
 
 from expert_digest.app.services import (
+    cluster_topics,
     collect_data_overview,
     generate_handbook,
     import_documents,
     persist_uploaded_jsonl,
 )
 from expert_digest.domain.models import Chunk, ChunkEmbedding, Document, Handbook
+from expert_digest.knowledge.topic_clusterer import TopicCluster
 
 
 def test_collect_data_overview_counts_documents_chunks_and_embeddings(monkeypatch):
@@ -248,4 +250,56 @@ def test_persist_uploaded_jsonl_sanitizes_filename_and_rejects_empty_name():
             filename="  ",
             content=payload,
             upload_dir=upload_dir,
+        )
+
+
+def test_cluster_topics_returns_report(monkeypatch):
+    fake_topics = [
+        TopicCluster(
+            topic_id="topic-1",
+            label="主题1：测试",
+            chunk_count=3,
+            representative_chunk_ids=["c1"],
+            representative_documents=[],
+        )
+    ]
+    captured: dict[str, object] = {}
+
+    def _fake_build_topic_clusters(**kwargs):
+        captured.update(kwargs)
+        return fake_topics
+
+    monkeypatch.setattr(
+        "expert_digest.app.services.build_topic_clusters",
+        _fake_build_topic_clusters,
+    )
+    monkeypatch.setattr(
+        "expert_digest.app.services.list_chunk_embeddings",
+        lambda *_a, **_k: [
+            ChunkEmbedding.create(
+                chunk_id="c1",
+                model="hash-bow-v1",
+                vector=[1.0, 0.0],
+            )
+        ],
+    )
+
+    result = cluster_topics(
+        db_path=Path("data/processed/zhihu_huang.sqlite3"),
+        model="hash-bow-v1",
+        num_topics=2,
+        top_docs=1,
+    )
+
+    assert result.topics == fake_topics
+    assert result.report.topic_count == 1
+    assert captured["num_topics"] == 2
+
+
+def test_cluster_topics_rejects_unsupported_label_mode():
+    with pytest.raises(ValueError, match="unsupported label_mode"):
+        cluster_topics(
+            db_path=Path("data/processed/zhihu_huang.sqlite3"),
+            model="hash-bow-v1",
+            label_mode="custom",
         )

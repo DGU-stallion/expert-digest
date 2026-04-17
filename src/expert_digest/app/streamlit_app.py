@@ -152,6 +152,136 @@ def _render_process_page(*, st, db_path: Path, model: str) -> None:
             else:
                 st.success(f"rebuild-embeddings 完成：{count} 条 embedding")
 
+    _render_topic_cluster_block(st=st, db_path=db_path, model=model)
+
+
+def _render_topic_cluster_block(*, st, db_path: Path, model: str) -> None:
+    st.markdown("---")
+    st.subheader("M6 主题聚类概览")
+    num_topics = st.slider(
+        "num_topics",
+        min_value=1,
+        max_value=10,
+        value=3,
+        key="cluster_num_topics",
+    )
+    top_docs = st.slider(
+        "top_docs_per_topic",
+        min_value=1,
+        max_value=5,
+        value=2,
+        key="cluster_top_docs",
+    )
+    max_iter = st.slider(
+        "max_iter",
+        min_value=10,
+        max_value=100,
+        value=30,
+        key="cluster_max_iter",
+    )
+    label_mode = st.selectbox(
+        "topic 标签模式",
+        options=["deterministic", "llm"],
+        index=0,
+        key="cluster_label_mode",
+    )
+    report_output = st.text_input(
+        "聚类报告输出路径（可选）",
+        value="data/outputs/topic_report.json",
+        key="cluster_report_output",
+    )
+    with st.expander("LLM 命名参数（可选）", expanded=False):
+        ccswitch_db = st.text_input(
+            "ccswitch_db_path (cluster)",
+            value=str(DEFAULT_CCSWITCH_DB_PATH),
+            key="cluster_ccswitch_db",
+        )
+        llm_timeout = st.number_input(
+            "llm_timeout (cluster)",
+            min_value=5,
+            max_value=60,
+            value=20,
+            step=1,
+            key="cluster_llm_timeout",
+        )
+
+    if st.button("生成主题聚类报告", type="primary", use_container_width=True):
+        try:
+            result = services.cluster_topics(
+                db_path=db_path,
+                model=model,
+                num_topics=num_topics,
+                top_docs=top_docs,
+                max_iter=max_iter,
+                label_mode=label_mode,
+                ccswitch_db_path=Path(ccswitch_db),
+                llm_timeout=int(llm_timeout),
+                report_output=Path(report_output.strip())
+                if report_output.strip()
+                else None,
+            )
+        except Exception as error:  # pragma: no cover
+            st.error(f"主题聚类失败: {error}")
+            return
+
+        report = result.report
+        metric_columns = st.columns(4)
+        metric_columns[0].metric("topic_count", report.topic_count)
+        metric_columns[1].metric("total_chunks", report.total_chunks)
+        metric_columns[2].metric(
+            "largest_topic_ratio",
+            f"{report.largest_topic_ratio:.4f}",
+        )
+        mean_intra = (
+            f"{report.mean_intra_similarity_proxy:.4f}"
+            if report.mean_intra_similarity_proxy is not None
+            else "(无)"
+        )
+        metric_columns[3].metric("mean_intra_proxy", mean_intra)
+
+        if result.topics:
+            st.markdown("#### 主题分布")
+            st.bar_chart({topic.label: topic.chunk_count for topic in result.topics})
+
+            st.markdown("#### 主题摘要")
+            st.table(
+                [
+                    {
+                        "topic": item.label,
+                        "chunks": item.chunk_count,
+                        "rep_docs": item.representative_document_count,
+                        "mean_rep_score": (
+                            f"{item.mean_representative_score:.4f}"
+                            if item.mean_representative_score is not None
+                            else "(无)"
+                        ),
+                    }
+                    for item in report.topics
+                ]
+            )
+
+            representative_rows: list[dict[str, str]] = []
+            for topic in result.topics:
+                for document in topic.representative_documents:
+                    representative_rows.append(
+                        {
+                            "topic": topic.label,
+                            "title": document.title,
+                            "author": document.author,
+                            "score": f"{document.score:.4f}",
+                        }
+                    )
+            st.markdown("#### 代表原文")
+            if representative_rows:
+                st.table(representative_rows)
+            else:
+                st.write("(无)")
+        else:
+            st.info("当前没有可用主题（请先确认 embeddings 是否已构建）。")
+
+        if result.report_output is not None:
+            st.success(f"聚类报告已导出：{result.report_output}")
+
 
 def _render_ask_page(*, st, db_path: Path, model: str) -> None:
     st.subheader("问答检索")
