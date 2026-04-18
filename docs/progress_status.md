@@ -10,6 +10,7 @@
 - M5 `streamlit demo`: completed
 - M6 `topic clustering enhancement`: completed
 - M7 `author profile + skill distillation baseline`: completed
+- M8 `Cherry Studio MCP integration`: in progress (baseline server completed)
 
 ## Completed Capabilities
 
@@ -39,6 +40,8 @@
 24. Skill draft generation from author profile (`generate-skill-draft`)
 25. App service support for profile/skill export (`build_author_profile_snapshot`, `generate_skill_draft`)
 26. Streamlit M7 page for profile/skill preview and export
+27. M8 MCP server baseline with Cherry Studio-oriented tools (`run-mcp-server`)
+28. Cherry Studio integration runbook (`docs/m8_cherry_studio_setup.md`)
 
 ## Live Data Integration
 
@@ -78,8 +81,15 @@ Current data snapshot:
 3. Explicit constraint kept: factual claims still sourced from RAG evidence: pass
 4. Streamlit supports profile + skill preview/export: pass
 
-## Next Recommended Steps (M8)
+## M8 Baseline Check (in progress)
 
-1. Add evaluation set for profile/skill quality (stability + usefulness + hallucination risk).
-2. Build profile-to-handbook adaptive section ordering and citation density controls.
-3. Introduce optional LLM-assisted profile synthesis with deterministic fallback and observability metadata.
+1. MCP server entry command exists (`run-mcp-server`): pass
+2. Exposed tools: `ask_author`, `search_posts`, `recommend_readings`, `list_topics`, `generate_handbook`, `generate_skill`: pass
+3. Uses existing retrieval/handbook/profile/skill services (no duplicate core logic): pass
+4. Cherry Studio end-to-end runtime validation: pending (manual check required)
+
+## Next Recommended Steps (M8 Completion)
+
+1. Validate MCP server end-to-end inside Cherry Studio and add setup screenshots/notes.
+2. Add auth/config wrapper for multi-database routing if one workspace serves multiple experts.
+3. Add MCP integration tests (tool-call contract and failure-path assertions with mock client).
