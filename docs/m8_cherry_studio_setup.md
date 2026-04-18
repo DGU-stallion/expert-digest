@@ -10,6 +10,7 @@
 2. Python 3.11+
 3. 已创建并可用 `.venv`
 4. 本地已有可查询数据库（例如：`data/processed/zhihu_huang.sqlite3`）
+5. 若使用 hybrid/LLM 主题总结，建议在 Cherry Studio Provider 中配置 Google API（`gemini-2.5-flash`）
 
 ## 2. 安装 MCP 依赖
 
@@ -45,6 +46,12 @@ cd D:\Project\Expert_Digest
 - 工作目录：`D:\Project\Expert_Digest`
 
 如果 Cherry Studio 支持 JSON 配置，核心就是同一条命令与参数。
+
+LLM 相关命令（例如 `generate-handbook --synthesis-mode hybrid` / `cluster-topics --label-mode llm`）默认读取：
+
+`C:\Users\<你自己的用户名>\.cc-switch\cc-switch.db`
+
+并优先尝试 Google/Gemini provider。
 
 ## 5. 工具列表（M8 baseline）
 
@@ -97,6 +104,12 @@ cd D:\Project\Expert_Digest
 .\.venv\Scripts\expert-digest.exe rebuild-chunks --db data/processed/zhihu_huang.sqlite3
 .\.venv\Scripts\expert-digest.exe rebuild-embeddings --db data/processed/zhihu_huang.sqlite3
 ```
+
+### Q4: hybrid 模式没有走 Gemini
+
+1. 确认 provider DB 中有 `Google/Gemini` 可用配置（含 API Key）。  
+2. 检查命令是否使用了正确配置库路径：`--llm-config-db <path-to-db>`（兼容旧参数 `--ccswitch-db`）。  
+3. 用 `generate-handbook --format json` 查看 `llm_provider/llm_model/llm_base_url` 字段确认运行时实际选中的 provider。
 
 ## 8. 验收清单
 

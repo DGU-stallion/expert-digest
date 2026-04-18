@@ -26,7 +26,7 @@
 10. Structured RAG ask command with evidence output and refusal policy (`ask`)
 11. JSON answer output for automation/evaluation (`ask --format json`)
 12. Handbook generation in deterministic/hybrid mode (`generate-handbook`)
-13. Hybrid mode LLM integration via local `ccswitch` NVIDIA provider config
+13. Hybrid mode LLM integration via local provider DB, preferring Google/Gemini config
 14. Handbook runtime observability metadata (`llm_provider/model/base_url`, `latency_ms`, `fallback_used`, `error_reason`)
 15. Optional run metadata export to JSON (`generate-handbook --save-run-metadata`)
 16. Streamlit baseline pages: import/process/ask/handbook preview

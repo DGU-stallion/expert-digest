@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -18,8 +19,10 @@ from expert_digest.generation.handbook_writer import (
     write_handbook,
 )
 from expert_digest.generation.llm_client import (
-    DEFAULT_CCSWITCH_DB_PATH,
+    DEFAULT_LLM_PROVIDER_DB_PATH,
     AnthropicCompatibleClient,
+    GeminiCompatibleClient,
+    OpenAICompatibleClient,
     create_default_handbook_llm_client,
 )
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
@@ -181,7 +184,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for document in documents:
             url = f" {document.url}" if document.url else ""
-            print(f"{document.id}\t{document.author}\t{document.title}{url}")
+            _print_text_safely(
+                f"{document.id}\t{document.author}\t{document.title}{url}"
+            )
         return 0
 
     if args.command == "ask":
@@ -199,11 +204,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-handbook":
-        llm_client: AnthropicCompatibleClient | None = None
+        llm_client: (
+            AnthropicCompatibleClient
+            | GeminiCompatibleClient
+            | OpenAICompatibleClient
+            | None
+        ) = None
         start_time = perf_counter()
         if args.synthesis_mode == "hybrid":
             llm_client = create_default_handbook_llm_client(
-                ccswitch_db_path=args.ccswitch_db,
+                ccswitch_db_path=args.llm_config_db,
                 timeout_seconds=args.llm_timeout,
                 max_output_tokens=args.llm_max_tokens,
             )
@@ -219,6 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_themes=args.max_themes,
                 theme_source=args.theme_source,
                 num_topics=args.num_topics,
+                topic_taxonomy_path=args.topic_taxonomy,
                 synthesizer=synthesizer,
             )
             output_path = write_handbook(handbook=handbook, output_path=args.output)
@@ -241,11 +252,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "cluster-topics":
-        llm_client: AnthropicCompatibleClient | None = None
+        llm_client: (
+            AnthropicCompatibleClient
+            | GeminiCompatibleClient
+            | OpenAICompatibleClient
+            | None
+        ) = None
         topic_labeler = DeterministicTopicLabeler()
         if args.label_mode == "llm":
             llm_client = create_default_handbook_llm_client(
-                ccswitch_db_path=args.ccswitch_db,
+                ccswitch_db_path=args.llm_config_db,
                 timeout_seconds=args.llm_timeout,
                 max_output_tokens=120,
             )
@@ -410,14 +426,15 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     handbook_parser.add_argument("--author")
     handbook_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
-    handbook_parser.add_argument("--top-k", type=int, default=3)
-    handbook_parser.add_argument("--max-themes", type=int, default=3)
+    handbook_parser.add_argument("--top-k", type=int, default=6)
+    handbook_parser.add_argument("--max-themes", type=int, default=6)
     handbook_parser.add_argument(
         "--theme-source",
         choices=["preset", "cluster"],
         default="preset",
     )
-    handbook_parser.add_argument("--num-topics", type=int, default=3)
+    handbook_parser.add_argument("--num-topics", type=int, default=10)
+    handbook_parser.add_argument("--topic-taxonomy", type=Path, default=None)
     handbook_parser.add_argument(
         "--output",
         type=Path,
@@ -429,9 +446,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="hybrid",
     )
     handbook_parser.add_argument(
+        "--llm-config-db",
         "--ccswitch-db",
         type=Path,
-        default=DEFAULT_CCSWITCH_DB_PATH,
+        dest="llm_config_db",
+        default=DEFAULT_LLM_PROVIDER_DB_PATH,
     )
     handbook_parser.add_argument("--llm-timeout", type=int, default=30)
     handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
@@ -450,9 +469,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="deterministic",
     )
     cluster_parser.add_argument(
+        "--llm-config-db",
         "--ccswitch-db",
         type=Path,
-        default=DEFAULT_CCSWITCH_DB_PATH,
+        dest="llm_config_db",
+        default=DEFAULT_LLM_PROVIDER_DB_PATH,
     )
     cluster_parser.add_argument("--llm-timeout", type=int, default=20)
     cluster_parser.add_argument("--report-output", type=Path, default=None)
@@ -483,7 +504,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _emit_structured_answer(result: StructuredAnswer, *, output_format: str) -> None:
     if output_format == "json":
-        print(json.dumps(asdict(result), ensure_ascii=False))
+        _print_json_safely(asdict(result))
         return
     _print_structured_answer(result)
 
@@ -513,7 +534,9 @@ def _emit_handbook_result(
     handbook: Handbook,
     output_path: Path,
     synthesis_mode: str,
-    llm_client: AnthropicCompatibleClient | None,
+    llm_client: (
+        AnthropicCompatibleClient | GeminiCompatibleClient | OpenAICompatibleClient | None
+    ),
     output_format: str,
     latency_ms: int,
     fallback_used: bool,
@@ -539,7 +562,7 @@ def _emit_handbook_result(
     }
 
     if output_format == "json":
-        print(json.dumps(payload, ensure_ascii=False))
+        _print_json_safely(payload)
         return payload
 
     print(
@@ -584,7 +607,7 @@ def _emit_topic_clusters(
     if output_format == "json":
         payload = {"topics": [asdict(topic) for topic in topics]}
         payload.update(metadata)
-        print(json.dumps(payload, ensure_ascii=False))
+        _print_json_safely(payload)
         return
     _print_topic_clusters(topics, metadata=metadata)
 
@@ -592,10 +615,30 @@ def _emit_topic_clusters(
 def _emit_author_profile(*, profile: object, output_format: str) -> dict[str, object]:
     payload = profile if isinstance(profile, dict) else asdict(profile)
     if output_format == "json":
-        print(json.dumps(payload, ensure_ascii=False))
+        _print_json_safely(payload)
         return payload
     _print_author_profile(payload)
     return payload
+
+
+def _print_json_safely(payload: object) -> None:
+    text = json.dumps(payload, ensure_ascii=False)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # Fallback for non-UTF8 Windows consoles (e.g., GBK) that cannot print
+        # some Unicode code points returned by source documents.
+        ascii_text = json.dumps(payload, ensure_ascii=True)
+        stream = sys.stdout
+        stream.write(f"{ascii_text}\n")
+
+
+def _print_text_safely(text: str) -> None:
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        sys.stdout.write(text.encode("ascii", "backslashreplace").decode("ascii"))
+        sys.stdout.write("\n")
 
 
 def _print_author_profile(profile: dict[str, object]) -> None:

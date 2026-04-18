@@ -11,7 +11,7 @@ M4 target in the development plan:
 ## Delivered
 
 1. `generate-handbook` command supports deterministic and hybrid synthesis.
-2. Hybrid mode loads NVIDIA config from local `ccswitch` when available.
+2. Hybrid mode loads local provider config and prefers Google/Gemini when available.
 3. JSON output includes observability metadata:
    - `llm_enabled`, `llm_provider`, `llm_model`, `llm_base_url`
    - `latency_ms`, `fallback_used`, `error_reason`

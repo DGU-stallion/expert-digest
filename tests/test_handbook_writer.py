@@ -4,6 +4,7 @@ from pathlib import Path
 
 from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 from expert_digest.generation.handbook_writer import (
+    DeterministicThemeSynthesizer,
     HybridThemeSynthesizer,
     build_handbook,
     write_handbook,
@@ -69,9 +70,9 @@ def _prepare_db(db_path: Path) -> None:
     save_chunk_embeddings(db_path, embeddings)
 
 
-def test_build_handbook_contains_required_sections_and_sources():
-    db_path = Path("data/processed/test_handbook_writer.sqlite3")
-    output_path = Path("data/outputs/test_handbook_writer.md")
+def test_build_handbook_contains_required_sections_and_sources(tmp_path: Path):
+    db_path = tmp_path / "test_handbook_writer.sqlite3"
+    output_path = tmp_path / "test_handbook_writer.md"
     _prepare_db(db_path)
     if output_path.exists():
         output_path.unlink()
@@ -87,11 +88,30 @@ def test_build_handbook_contains_required_sections_and_sources():
     markdown = output_path.read_text(encoding="utf-8")
     assert handbook.author == "黄彦臻"
     assert len(handbook.source_document_ids) >= 2
-    assert "## 专家内容总览" in markdown
-    assert "## 核心主题初稿" in markdown
-    assert "## 每个主题的核心观点" in markdown
+    assert "## 简介" in markdown
+    assert "## 目录" in markdown
+    assert "## 总览" in markdown
+    assert "## 作者画像" in markdown
+    assert "## 主题地图" in markdown
+    assert "## 主题章节" in markdown
+    assert "#### 主题综述" in markdown
+    assert "#### 文章池（Top）" in markdown
+    assert "#### 观点蒸馏" in markdown
     assert "## 推荐阅读路径" in markdown
-    assert "## 原文索引" in markdown
+    assert "本版手册由混合模式生成" in markdown
+
+
+def test_build_handbook_deterministic_mode_text(tmp_path: Path):
+    db_path = tmp_path / "test_handbook_writer.sqlite3"
+    _prepare_db(db_path)
+
+    handbook = build_handbook(
+        db_path=db_path,
+        author="黄彦臻",
+        synthesizer=DeterministicThemeSynthesizer(),
+    )
+
+    assert "本版手册由确定性模式生成：不依赖 LLM。" in handbook.markdown
 
 
 def test_hybrid_theme_synthesizer_prefers_llm_when_client_available():

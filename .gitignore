@@ -31,3 +31,5 @@ data/outputs/
 !data/.gitkeep
 !data/sample/
 !data/sample/.gitkeep
+
+tmp_pytest_run/

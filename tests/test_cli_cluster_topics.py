@@ -122,9 +122,9 @@ def test_cli_cluster_topics_llm_mode_wires_labeler_and_metadata(monkeypatch, cap
     captured: dict[str, object] = {}
 
     class _FakeLLMClient:
-        provider = "nvidia"
-        model = "stepfun-ai/step-3.5-flash"
-        base_url = "https://integrate.api.nvidia.com"
+        provider = "google"
+        model = "gemini-2.5-flash"
+        base_url = "https://generativelanguage.googleapis.com"
 
         def generate(self, *, system_prompt: str, user_prompt: str) -> str:
             return "价值投资与风险控制"
@@ -152,7 +152,7 @@ def test_cli_cluster_topics_llm_mode_wires_labeler_and_metadata(monkeypatch, cap
     assert exit_code == 0
     assert isinstance(captured["labeler"], LLMTopicLabeler)
     assert payload["label_mode"] == "llm"
-    assert payload["llm_provider"] == "nvidia"
+    assert payload["llm_provider"] == "google"
 
 
 def test_cli_cluster_topics_can_save_report_payload(monkeypatch, capsys):

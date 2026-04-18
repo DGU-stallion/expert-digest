@@ -1,7 +1,8 @@
 import json
+from io import StringIO
 from pathlib import Path
 
-from expert_digest.cli import main
+from expert_digest.cli import _print_json_safely, main
 from expert_digest.domain.models import Document, Handbook
 from expert_digest.rag.answering import AnswerEvidence, StructuredAnswer
 from expert_digest.storage.sqlite_store import (
@@ -400,9 +401,9 @@ def test_cli_generate_handbook_hybrid_uses_default_llm_client(monkeypatch, capsy
     captured: dict[str, object] = {}
 
     class _FakeLLMClient:
-        provider = "nvidia"
-        model = "stepfun-ai/step-3.5-flash"
-        base_url = "https://integrate.api.nvidia.com"
+        provider = "google"
+        model = "gemini-2.5-flash"
+        base_url = "https://generativelanguage.googleapis.com"
 
     fake_llm_client = _FakeLLMClient()
     handbook = Handbook(
@@ -456,9 +457,9 @@ def test_cli_generate_handbook_json_output_includes_llm_metadata(
     monkeypatch, capsys
 ):
     class _FakeLLMClient:
-        base_url = "https://integrate.api.nvidia.com"
-        model = "stepfun-ai/step-3.5-flash"
-        provider = "nvidia"
+        base_url = "https://generativelanguage.googleapis.com"
+        model = "gemini-2.5-flash"
+        provider = "google"
 
     handbook = Handbook(
         author="黄彦臻",
@@ -493,9 +494,9 @@ def test_cli_generate_handbook_json_output_includes_llm_metadata(
     assert exit_code == 0
     assert payload["author"] == "黄彦臻"
     assert payload["llm_enabled"] is True
-    assert payload["llm_provider"] == "nvidia"
-    assert payload["llm_model"] == "stepfun-ai/step-3.5-flash"
-    assert payload["llm_base_url"] == "https://integrate.api.nvidia.com"
+    assert payload["llm_provider"] == "google"
+    assert payload["llm_model"] == "gemini-2.5-flash"
+    assert payload["llm_base_url"] == "https://generativelanguage.googleapis.com"
     assert payload["latency_ms"] >= 0
     assert payload["fallback_used"] is False
     assert payload["error_reason"] is None
@@ -576,3 +577,18 @@ def test_cli_generate_handbook_can_save_run_metadata(monkeypatch, capsys):
     assert exit_code == 0
     assert captured["output_path"] == Path("data/outputs/handbook_run_metadata.json")
     assert captured["payload"]["synthesis_mode"] == "deterministic"
+
+
+def test_print_json_safely_falls_back_when_terminal_encoding_rejects_unicode(
+    monkeypatch,
+):
+    def _raise_unicode_error(_text):
+        raise UnicodeEncodeError("gbk", "x", 0, 1, "illegal multibyte sequence")
+
+    fallback_stream = StringIO()
+    monkeypatch.setattr("builtins.print", _raise_unicode_error)
+    monkeypatch.setattr("expert_digest.cli.sys.stdout", fallback_stream)
+
+    _print_json_safely({"text": "\ue1be"})
+
+    assert "\\ue1be" in fallback_stream.getvalue()
