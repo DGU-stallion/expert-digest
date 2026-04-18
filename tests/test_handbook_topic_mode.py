@@ -81,8 +81,11 @@ def test_build_handbook_supports_cluster_theme_source(monkeypatch):
         synthesizer=DeterministicThemeSynthesizer(),
     )
 
-    assert "主题1：测试主题" in handbook.markdown
-    assert "主题组织方式：cluster" in handbook.markdown
+    assert "泡泡玛特复盘" in handbook.markdown
+    assert (
+        "主题组织方式：cluster（机器聚类后按人工规则命名与合并）"
+        in handbook.markdown
+    )
 
 
 def test_build_handbook_cluster_falls_back_to_preset_when_no_topics(monkeypatch):
@@ -119,7 +122,7 @@ def test_build_handbook_cluster_falls_back_to_preset_when_no_topics(monkeypatch)
         synthesizer=DeterministicThemeSynthesizer(),
     )
 
-    assert "核心能力与方法" in handbook.markdown
+    assert "主题 1：核心能力与方法" in handbook.markdown
 
 
 def test_build_handbook_rejects_unsupported_theme_source(monkeypatch):
@@ -150,3 +153,69 @@ def test_build_handbook_rejects_unsupported_theme_source(monkeypatch):
         raise AssertionError("expected ValueError")
     except ValueError as error:
         assert "unsupported theme_source" in str(error)
+
+
+def test_build_handbook_cluster_applies_manual_topic_taxonomy(monkeypatch, tmp_path):
+    document, chunk, embedding = _build_fixture()
+    taxonomy_path = tmp_path / "topic_taxonomy.json"
+    taxonomy_path.write_text(
+        (
+            '{'
+            '"rules": ['
+            '{"name": "股票主题", "keywords": ["泡泡玛特", "股市"]}'
+            "]"
+            "}"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "expert_digest.generation.handbook_writer.list_documents",
+        lambda *_a, **_k: [document],
+    )
+    monkeypatch.setattr(
+        "expert_digest.generation.handbook_writer.get_documents_by_author",
+        lambda *_a, **_k: [document],
+    )
+    monkeypatch.setattr(
+        "expert_digest.generation.handbook_writer.list_chunks",
+        lambda *_a, **_k: [chunk],
+    )
+    monkeypatch.setattr(
+        "expert_digest.generation.handbook_writer.list_chunk_embeddings",
+        lambda *_a, **_k: [embedding],
+    )
+    monkeypatch.setattr(
+        "expert_digest.generation.handbook_writer.cluster_chunks_by_embeddings",
+        lambda **_kwargs: [
+            TopicCluster(
+                topic_id="topic-1",
+                label="主题1：测试主题",
+                chunk_count=1,
+                representative_chunk_ids=[chunk.id],
+                representative_documents=[
+                    TopicRepresentativeDocument(
+                        document_id=document.id,
+                        title=document.title,
+                        author=document.author,
+                        url=document.url,
+                        score=0.9,
+                        supporting_chunk_id=chunk.id,
+                    )
+                ],
+            )
+        ],
+    )
+
+    handbook = build_handbook(
+        db_path="data/processed/unused.sqlite3",
+        author="黄彦臻",
+        theme_source="cluster",
+        num_topics=1,
+        top_k=1,
+        max_themes=1,
+        topic_taxonomy_path=taxonomy_path,
+        synthesizer=DeterministicThemeSynthesizer(),
+    )
+
+    assert "股票主题" in handbook.markdown

@@ -15,7 +15,7 @@ This repository currently includes:
   policy for low-confidence/no-evidence questions.
 - M4 handbook generation: hybrid (LLM + deterministic fallback) handbook
   generation with JSON observability metadata export.
-- M5 streamlit demo: import/process/ask/handbook flow for local walkthrough.
+- M5 streamlit demo (legacy): local demo UI, no longer the primary product path.
 - M6 topic clustering enhancement: cluster output, report metrics, and topic
   naming strategy (deterministic + optional LLM fallback).
 - M7 author profile + skill baseline: profile extraction and skill draft
@@ -40,6 +40,12 @@ Install the project with development tools:
 
 ```powershell
 python -m pip install -e ".[dev]"
+```
+
+Install app + MCP dependencies when you need Cherry Studio MCP (and optional legacy Streamlit):
+
+```powershell
+python -m pip install -e ".[app,mcp]"
 ```
 
 ## Verify
@@ -79,7 +85,7 @@ expert-digest list-documents --db data/processed/expert_digest.sqlite3
 Filter by author:
 
 ```powershell
-expert-digest list-documents --author "陈一鸣" --db data/processed/expert_digest.sqlite3
+expert-digest list-documents --author "黄彦臻" --db data/processed/expert_digest.sqlite3
 ```
 
 Import a folder of Markdown files:
@@ -136,22 +142,35 @@ Ask with machine-readable JSON:
 expert-digest ask "泡泡玛特的核心能力是什么？" --db data/processed/zhihu_huang.sqlite3 --format json
 ```
 
-Generate handbook (hybrid mode, default):
+Generate handbook (recommended: cluster + manual taxonomy naming):
 
 ```powershell
-expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --output data/outputs/handbook.md
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --theme-source cluster --num-topics 8 --topic-taxonomy configs/handbook_topic_taxonomy.json --output data/outputs/huang_handbook.md
 ```
 
-Generate handbook organized by clustered topics:
+Hybrid mode loads LLM configuration from the local provider database by default
+(`C:\Users\<you>\.cc-switch\cc-switch.db`) and prefers Google/Gemini providers
+when available.
+
+If you want to force Cherry Studio's Google Gemini 2.5 Flash (OpenAI-compatible endpoint),
+set environment variables before running handbook generation:
 
 ```powershell
-expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --theme-source cluster --num-topics 4
+$env:OPENAI_BASE_URL="http://127.0.0.1:8000/v1"
+$env:OPENAI_API_KEY="your-cherry-token"
+$env:OPENAI_MODEL="gemini-2.5-flash"
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --author "黄彦臻" --theme-source cluster --num-topics 12 --max-themes 8 --top-k 8 --topic-taxonomy configs/handbook_topic_taxonomy.json --synthesis-mode hybrid --format json
 ```
 
-Generate handbook as JSON result (with runtime metadata):
+Use the JSON output to confirm runtime metadata:
+- `llm_enabled=true`
+- `llm_model=gemini-2.5-flash`
+- `fallback_used=false` (means LLM call succeeded)
+
+Generate handbook with clustered topics and JSON metadata:
 
 ```powershell
-expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --format json
+expert-digest generate-handbook --db data/processed/zhihu_huang.sqlite3 --theme-source cluster --num-topics 8 --topic-taxonomy configs/handbook_topic_taxonomy.json --format json
 ```
 
 Generate handbook and save run metadata to JSON file:
@@ -185,23 +204,11 @@ Export cluster report artifact (topic distribution + similarity proxy metrics):
 expert-digest cluster-topics --db data/processed/zhihu_huang.sqlite3 --num-topics 3 --top-docs 2 --format json --report-output data/outputs/topic_report.json
 ```
 
-Run the M5 Streamlit demo (import/process/ask/handbook preview):
-
-```powershell
-python -m pip install -e ".[app]"
-streamlit run src/expert_digest/app/streamlit_app.py
-```
-
-Build deterministic author profile:
-
-```powershell
-expert-digest build-author-profile --db data/processed/zhihu_huang.sqlite3 --format json
-```
-
 Generate skill draft from profile:
 
 ```powershell
-expert-digest generate-skill-draft --db data/processed/zhihu_huang.sqlite3 --output data/outputs/skill.md
+expert-digest build-author-profile --db data/processed/zhihu_huang.sqlite3 --format json
+expert-digest generate-skill-draft --db data/processed/zhihu_huang.sqlite3 --output data/outputs/huang_skill.md
 ```
 
 Run MCP server baseline for Cherry Studio (stdio):
@@ -215,13 +222,16 @@ Cherry Studio MCP integration guide:
 
 - `docs/m8_cherry_studio_setup.md`
 
-In the Streamlit "导入数据" page, JSONL supports direct file upload (with
-local path fallback).
+Run one-command local self-check (import -> process -> ask -> handbook -> profile -> skill):
+
+```powershell
+.\scripts\quickstart_selfcheck.ps1
+```
 
 JSONL input uses one article per line:
 
 ```json
-{"author":"陈一鸣","title":"问题意识是学习的入口","content":"...","source":"synthetic-sample","url":"https://example.com/article","created_at":"2026-01-01"}
+{"author":"黄彦臻","title":"关于泡泡玛特的极简复盘","content":"...","source":"zhihu:article:2023428236160280283","url":"http://zhuanlan.zhihu.com/p/2023428236160280283","created_at":"2026-04-03T07:55:11.000Z"}
 ```
 
 Required fields are `author`, `title`, `content`, and `source`. Optional fields
@@ -231,13 +241,13 @@ Markdown import supports optional front matter:
 
 ```markdown
 ---
-author: 陈一鸣
-title: 问题意识是学习的入口
-url: https://example.com/article
-created_at: 2026-01-01
+author: 黄彦臻
+title: 关于泡泡玛特的极简复盘
+url: http://zhuanlan.zhihu.com/p/2023428236160280283
+created_at: 2026-04-03T07:55:11.000Z
 ---
 
-# 问题意识是学习的入口
+# 关于泡泡玛特的极简复盘
 
 正文内容。
 ```

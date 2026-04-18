@@ -4,6 +4,7 @@ from pathlib import Path
 
 from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
 from expert_digest.generation.handbook_writer import (
+    DeterministicThemeSynthesizer,
     HybridThemeSynthesizer,
     build_handbook,
     write_handbook,
@@ -69,9 +70,9 @@ def _prepare_db(db_path: Path) -> None:
     save_chunk_embeddings(db_path, embeddings)
 
 
-def test_build_handbook_contains_required_sections_and_sources():
-    db_path = Path("data/processed/test_handbook_writer.sqlite3")
-    output_path = Path("data/outputs/test_handbook_writer.md")
+def test_build_handbook_contains_required_sections_and_sources(tmp_path: Path):
+    db_path = tmp_path / "test_handbook_writer.sqlite3"
+    output_path = tmp_path / "test_handbook_writer.md"
     _prepare_db(db_path)
     if output_path.exists():
         output_path.unlink()
@@ -87,17 +88,40 @@ def test_build_handbook_contains_required_sections_and_sources():
     markdown = output_path.read_text(encoding="utf-8")
     assert handbook.author == "黄彦臻"
     assert len(handbook.source_document_ids) >= 2
-    assert "## 专家内容总览" in markdown
-    assert "## 核心主题初稿" in markdown
-    assert "## 每个主题的核心观点" in markdown
+    assert "## 简介" in markdown
+    assert "## 目录" in markdown
+    assert "## 总览" in markdown
+    assert "## 作者画像" in markdown
+    assert "## 主题地图" in markdown
+    assert "## 主题章节" in markdown
+    assert "#### 主题综述" in markdown
+    assert "#### 文章池（Top）" in markdown
+    assert "#### 观点蒸馏" in markdown
     assert "## 推荐阅读路径" in markdown
-    assert "## 原文索引" in markdown
+    assert "本版手册由混合模式生成" in markdown
+
+
+def test_build_handbook_deterministic_mode_text(tmp_path: Path):
+    db_path = tmp_path / "test_handbook_writer.sqlite3"
+    _prepare_db(db_path)
+
+    handbook = build_handbook(
+        db_path=db_path,
+        author="黄彦臻",
+        synthesizer=DeterministicThemeSynthesizer(),
+    )
+
+    assert "本版手册由确定性模式生成：不依赖 LLM。" in handbook.markdown
 
 
 def test_hybrid_theme_synthesizer_prefers_llm_when_client_available():
     class _FakeLLMClient:
         def generate(self, *, system_prompt: str, user_prompt: str) -> str:
-            return "LLM主题总结"
+            return (
+                "LLM主题总结：核心能力是IP运营与预期管理，"
+                "并通过持续复盘构建目标、反馈与纠偏闭环，"
+                "从而把策略执行稳定地转化为可验证结果。"
+            )
 
     synthesizer = HybridThemeSynthesizer(llm_client=_FakeLLMClient())
     summary = synthesizer.summarize_theme(
@@ -142,3 +166,31 @@ def test_hybrid_theme_synthesizer_falls_back_when_llm_fails():
     )
 
     assert "泡泡玛特的核心在于IP运营与预期管理" in summary
+
+
+def test_hybrid_theme_synthesizer_falls_back_when_llm_output_is_truncated():
+    class _LowQualityLLMClient:
+        def generate(self, *, system_prompt: str, user_prompt: str) -> str:
+            return "中国房地产市场正经历一个长期且复杂的"
+
+    synthesizer = HybridThemeSynthesizer(llm_client=_LowQualityLLMClient())
+    summary = synthesizer.summarize_theme(
+        theme_name="核心能力",
+        question="作者的核心能力是什么？",
+        evidence_chunks=[
+            RetrievedChunk(
+                chunk_id="c1",
+                score=0.9,
+                document_id="d1",
+                title="泡泡玛特复盘",
+                author="黄彦臻",
+                text="泡泡玛特的核心在于IP运营与预期管理。",
+                url="https://example.com/p1",
+            )
+        ],
+    )
+
+    assert "泡泡玛特的核心在于IP运营与预期管理" in summary
+    metadata = synthesizer.runtime_metadata()
+    assert metadata["fallback_used"] is True
+    assert metadata["error_reason"] == "llm_low_quality_output"

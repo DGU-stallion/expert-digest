@@ -15,7 +15,7 @@ from expert_digest.generation.handbook_writer import (
     write_handbook,
 )
 from expert_digest.generation.llm_client import (
-    DEFAULT_CCSWITCH_DB_PATH,
+    DEFAULT_LLM_PROVIDER_DB_PATH,
     create_default_handbook_llm_client,
 )
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
@@ -207,16 +207,21 @@ def generate_handbook(
     synthesis_mode: str = "hybrid",
     theme_source: str = "preset",
     num_topics: int = 3,
-    ccswitch_db_path: str | Path = DEFAULT_CCSWITCH_DB_PATH,
+    topic_taxonomy_path: str | Path | None = None,
+    llm_config_db_path: str | Path = DEFAULT_LLM_PROVIDER_DB_PATH,
+    ccswitch_db_path: str | Path | None = None,
     llm_timeout: int = 30,
     llm_max_tokens: int = 700,
 ) -> HandbookResult:
     if synthesis_mode not in {"hybrid", "deterministic"}:
         raise ValueError(f"unsupported synthesis mode: {synthesis_mode}")
 
+    if ccswitch_db_path is not None:
+        llm_config_db_path = ccswitch_db_path
+
     if synthesis_mode == "hybrid":
         llm_client = create_default_handbook_llm_client(
-            ccswitch_db_path=ccswitch_db_path,
+            ccswitch_db_path=llm_config_db_path,
             timeout_seconds=llm_timeout,
             max_output_tokens=llm_max_tokens,
         )
@@ -232,6 +237,7 @@ def generate_handbook(
         max_themes=max_themes,
         theme_source=theme_source,
         num_topics=num_topics,
+        topic_taxonomy_path=topic_taxonomy_path,
         synthesizer=synthesizer,
     )
     resolved_output_path = write_handbook(handbook=handbook, output_path=output_path)
@@ -246,18 +252,22 @@ def cluster_topics(
     top_docs: int = 3,
     max_iter: int = 30,
     label_mode: str = "deterministic",
-    ccswitch_db_path: str | Path = DEFAULT_CCSWITCH_DB_PATH,
+    llm_config_db_path: str | Path = DEFAULT_LLM_PROVIDER_DB_PATH,
+    ccswitch_db_path: str | Path | None = None,
     llm_timeout: int = 20,
     report_output: str | Path | None = None,
 ) -> TopicClusterResult:
     if label_mode not in {"deterministic", "llm"}:
         raise ValueError(f"unsupported label_mode: {label_mode}")
 
+    if ccswitch_db_path is not None:
+        llm_config_db_path = ccswitch_db_path
+
     llm_client = None
     labeler = DeterministicTopicLabeler()
     if label_mode == "llm":
         llm_client = create_default_handbook_llm_client(
-            ccswitch_db_path=ccswitch_db_path,
+            ccswitch_db_path=llm_config_db_path,
             timeout_seconds=llm_timeout,
             max_output_tokens=120,
         )

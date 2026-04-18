@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from expert_digest.app import services
-from expert_digest.generation.llm_client import DEFAULT_CCSWITCH_DB_PATH
+from expert_digest.generation.llm_client import DEFAULT_LLM_PROVIDER_DB_PATH
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
     DEFAULT_EMBEDDING_MODEL,
@@ -193,10 +193,10 @@ def _render_topic_cluster_block(*, st, db_path: Path, model: str) -> None:
         key="cluster_report_output",
     )
     with st.expander("LLM 命名参数（可选）", expanded=False):
-        ccswitch_db = st.text_input(
-            "ccswitch_db_path (cluster)",
-            value=str(DEFAULT_CCSWITCH_DB_PATH),
-            key="cluster_ccswitch_db",
+        llm_config_db = st.text_input(
+            "llm_config_db_path (cluster)",
+            value=str(DEFAULT_LLM_PROVIDER_DB_PATH),
+            key="cluster_llm_config_db",
         )
         llm_timeout = st.number_input(
             "llm_timeout (cluster)",
@@ -216,7 +216,7 @@ def _render_topic_cluster_block(*, st, db_path: Path, model: str) -> None:
                 top_docs=top_docs,
                 max_iter=max_iter,
                 label_mode=label_mode,
-                ccswitch_db_path=Path(ccswitch_db),
+                llm_config_db_path=Path(llm_config_db),
                 llm_timeout=int(llm_timeout),
                 report_output=Path(report_output.strip())
                 if report_output.strip()
@@ -383,9 +383,9 @@ def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
     )
 
     with st.expander("LLM 参数（为后续 API 接入预留）", expanded=False):
-        ccswitch_db = st.text_input(
-            "ccswitch_db_path",
-            value=str(DEFAULT_CCSWITCH_DB_PATH),
+        llm_config_db = st.text_input(
+            "llm_config_db_path",
+            value=str(DEFAULT_LLM_PROVIDER_DB_PATH),
         )
         llm_timeout = st.number_input("llm_timeout", min_value=5, value=30, step=1)
         llm_max_tokens = st.number_input(
@@ -407,7 +407,7 @@ def _render_handbook_page(*, st, db_path: Path, model: str) -> None:
                 synthesis_mode=synthesis_mode,
                 theme_source=theme_source,
                 num_topics=num_topics,
-                ccswitch_db_path=Path(ccswitch_db),
+                llm_config_db_path=Path(llm_config_db),
                 llm_timeout=int(llm_timeout),
                 llm_max_tokens=int(llm_max_tokens),
             )
