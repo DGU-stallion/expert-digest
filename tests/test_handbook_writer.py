@@ -117,7 +117,11 @@ def test_build_handbook_deterministic_mode_text(tmp_path: Path):
 def test_hybrid_theme_synthesizer_prefers_llm_when_client_available():
     class _FakeLLMClient:
         def generate(self, *, system_prompt: str, user_prompt: str) -> str:
-            return "LLM主题总结"
+            return (
+                "LLM主题总结：核心能力是IP运营与预期管理，"
+                "并通过持续复盘构建目标、反馈与纠偏闭环，"
+                "从而把策略执行稳定地转化为可验证结果。"
+            )
 
     synthesizer = HybridThemeSynthesizer(llm_client=_FakeLLMClient())
     summary = synthesizer.summarize_theme(
@@ -162,3 +166,31 @@ def test_hybrid_theme_synthesizer_falls_back_when_llm_fails():
     )
 
     assert "泡泡玛特的核心在于IP运营与预期管理" in summary
+
+
+def test_hybrid_theme_synthesizer_falls_back_when_llm_output_is_truncated():
+    class _LowQualityLLMClient:
+        def generate(self, *, system_prompt: str, user_prompt: str) -> str:
+            return "中国房地产市场正经历一个长期且复杂的"
+
+    synthesizer = HybridThemeSynthesizer(llm_client=_LowQualityLLMClient())
+    summary = synthesizer.summarize_theme(
+        theme_name="核心能力",
+        question="作者的核心能力是什么？",
+        evidence_chunks=[
+            RetrievedChunk(
+                chunk_id="c1",
+                score=0.9,
+                document_id="d1",
+                title="泡泡玛特复盘",
+                author="黄彦臻",
+                text="泡泡玛特的核心在于IP运营与预期管理。",
+                url="https://example.com/p1",
+            )
+        ],
+    )
+
+    assert "泡泡玛特的核心在于IP运营与预期管理" in summary
+    metadata = synthesizer.runtime_metadata()
+    assert metadata["fallback_used"] is True
+    assert metadata["error_reason"] == "llm_low_quality_output"

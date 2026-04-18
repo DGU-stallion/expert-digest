@@ -233,8 +233,11 @@ class HybridThemeSynthesizer:
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                 ).strip()
-                if llm_output:
+                if llm_output and not _is_low_quality_summary(llm_output):
                     return llm_output
+                if llm_output:
+                    self._llm_failures += 1
+                    self._last_error_reason = "llm_low_quality_output"
             except Exception:
                 # Fail-closed: if llm invocation fails, keep deterministic behavior.
                 self._llm_failures += 1
@@ -724,6 +727,21 @@ def _clip(text: str, *, limit: int = 100) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 1].rstrip() + "…"
+
+
+def _is_low_quality_summary(text: str) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return True
+    if len(normalized) < 60:
+        return True
+    if normalized.endswith(("：", ":", "，", ",", "、", "（", "(", "-", "—")):
+        return True
+    if normalized[-1] in {"的", "了", "和", "与", "及", "并", "在", "对", "是"}:
+        return True
+    if not any(mark in normalized for mark in ("。", "！", "？", ".", "!", "?")):
+        return True
+    return False
 
 
 def _load_topic_taxonomy(

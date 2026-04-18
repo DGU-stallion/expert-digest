@@ -33,3 +33,4 @@ data/outputs/
 !data/sample/.gitkeep
 
 tmp_pytest_run/
+pytest_tmp_work/
