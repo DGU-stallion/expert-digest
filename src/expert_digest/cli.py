@@ -37,6 +37,7 @@ from expert_digest.knowledge.topic_clusterer import (
     build_topic_clusters,
 )
 from expert_digest.knowledge.topic_report import build_topic_report
+from expert_digest.mcp.server import run_mcp_server
 from expert_digest.processing.cleaner import clean_document
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
@@ -328,6 +329,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Generated skill draft: {output_path}")
         return 0
 
+    if args.command == "run-mcp-server":
+        try:
+            run_mcp_server(
+                db_path=args.db,
+                model=args.model,
+                output_dir=args.output_dir,
+                transport=args.transport,
+            )
+        except RuntimeError as error:
+            print(f"Failed to start MCP server: {error}")
+            return 1
+        return 0
+
     parser.print_help()
     return 0
 
@@ -457,6 +471,12 @@ def _build_parser() -> argparse.ArgumentParser:
     skill_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     skill_parser.add_argument("--author")
     skill_parser.add_argument("--output", type=Path, default=None)
+
+    mcp_parser = subparsers.add_parser("run-mcp-server")
+    mcp_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    mcp_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
+    mcp_parser.add_argument("--output-dir", type=Path, default=Path("data/outputs"))
+    mcp_parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
 
     return parser
 

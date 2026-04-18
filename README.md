@@ -18,6 +18,9 @@ This repository currently includes:
 - M5 streamlit demo: import/process/ask/handbook flow for local walkthrough.
 - M6 topic clustering enhancement: cluster output, report metrics, and topic
   naming strategy (deterministic + optional LLM fallback).
+- M7 author profile + skill baseline: profile extraction and skill draft
+  generation.
+- M8 MCP server baseline: Cherry Studio-ready MCP tool endpoints (stdio/sse).
 
 ## Requirements
 
@@ -188,6 +191,29 @@ Run the M5 Streamlit demo (import/process/ask/handbook preview):
 python -m pip install -e ".[app]"
 streamlit run src/expert_digest/app/streamlit_app.py
 ```
+
+Build deterministic author profile:
+
+```powershell
+expert-digest build-author-profile --db data/processed/zhihu_huang.sqlite3 --format json
+```
+
+Generate skill draft from profile:
+
+```powershell
+expert-digest generate-skill-draft --db data/processed/zhihu_huang.sqlite3 --output data/outputs/skill.md
+```
+
+Run MCP server baseline for Cherry Studio (stdio):
+
+```powershell
+python -m pip install -e ".[mcp]"
+expert-digest run-mcp-server --db data/processed/zhihu_huang.sqlite3 --transport stdio
+```
+
+Cherry Studio MCP integration guide:
+
+- `docs/m8_cherry_studio_setup.md`
 
 In the Streamlit "导入数据" page, JSONL supports direct file upload (with
 local path fallback).
