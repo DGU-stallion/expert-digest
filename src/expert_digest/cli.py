@@ -42,6 +42,7 @@ from expert_digest.knowledge.topic_clusterer import (
 from expert_digest.knowledge.topic_report import build_topic_report
 from expert_digest.mcp.server import run_mcp_server
 from expert_digest.processing.cleaner import clean_document
+from expert_digest.processing.evidence_builder import build_document_evidence
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
     DEFAULT_EMBEDDING_MODEL,
@@ -54,16 +55,26 @@ from expert_digest.rag.query_service import answer_question
 from expert_digest.retrieval.retriever import rank_chunk_embeddings
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
+    clear_evidence,
     clear_chunk_embeddings,
     clear_chunks,
     get_documents_by_author,
     list_chunk_embeddings,
     list_chunks,
     list_documents,
+    list_evidence_spans,
+    list_parent_sections,
     save_chunk_embeddings,
     save_chunks,
     save_documents,
+    save_evidence_spans,
+    save_parent_sections,
 )
+from expert_digest.wiki.analyzer import analyze_document_evidence
+from expert_digest.wiki.evaluator import evaluate_wiki
+from expert_digest.wiki.retriever import search_wiki
+from expert_digest.wiki.vault import WikiVault
+from expert_digest.wiki.writer import write_analysis_to_vault
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -174,6 +185,98 @@ def main(argv: Sequence[str] | None = None) -> int:
             title = document.title if document else "<unknown>"
             snippet = chunk.text.replace("\n", " ").strip()[:100]
             print(f"score={item.score:.4f}\t{title}\t{snippet}")
+        return 0
+
+    if args.command == "build-evidence":
+        documents = list_documents(args.db)
+        removed = (
+            clear_evidence(args.db)
+            if args.rebuild
+            else {"parent_sections": 0, "chunks": 0, "evidence_spans": 0}
+        )
+        all_sections = []
+        all_chunks = []
+        all_spans = []
+        for document in documents:
+            evidence = build_document_evidence(
+                clean_document(document),
+                parent_max_chars=args.parent_max_chars,
+                child_max_chars=args.child_max_chars,
+                child_min_chars=args.child_min_chars,
+                span_max_chars=args.span_max_chars,
+            )
+            all_sections.extend(evidence.parent_sections)
+            all_chunks.extend(evidence.chunks)
+            all_spans.extend(evidence.evidence_spans)
+        save_parent_sections(args.db, all_sections)
+        save_chunks(args.db, all_chunks)
+        save_evidence_spans(args.db, all_spans)
+        print(
+            "Built evidence: "
+            f"documents={len(documents)} sections={len(all_sections)} "
+            f"chunks={len(all_chunks)} spans={len(all_spans)} "
+            f"cleared={removed}"
+        )
+        return 0
+
+    if args.command == "build-wiki":
+        vault = WikiVault(root=args.wiki_root)
+        vault.initialize(
+            expert_id=args.expert_id,
+            expert_name=args.expert_name,
+            purpose=args.purpose,
+        )
+        documents = list_documents(args.db)
+        sections = list_parent_sections(args.db)
+        spans = list_evidence_spans(args.db)
+        chunks = list_chunks(args.db)
+        sections_by_document = {}
+        for section in sections:
+            sections_by_document.setdefault(section.document_id, []).append(section)
+        chunks_by_document = {}
+        for chunk in chunks:
+            chunks_by_document.setdefault(chunk.document_id, []).append(chunk)
+        spans_by_document = {}
+        for span in spans:
+            spans_by_document.setdefault(span.document_id, []).append(span)
+        written_sources = 0
+        for document in documents:
+            evidence = _document_evidence_from_store(
+                document=document,
+                sections=sections_by_document.get(document.id, []),
+                chunks=chunks_by_document.get(document.id, []),
+                spans=spans_by_document.get(document.id, []),
+            )
+            analysis = analyze_document_evidence(evidence)
+            write_analysis_to_vault(
+                vault=vault,
+                analysis=analysis,
+                evidence_spans=evidence.evidence_spans,
+            )
+            written_sources += 1
+        print(f"Built wiki: sources={written_sources} root={args.wiki_root}")
+        return 0
+
+    if args.command == "search-wiki":
+        hits = search_wiki(
+            vault=WikiVault(root=args.wiki_root),
+            query=args.query,
+            top_k=args.top_k,
+        )
+        for hit in hits:
+            print(
+                f"score={hit.score:.2f}\t{hit.page.page_type}\t"
+                f"{hit.page.title}\t{hit.page.path}\t"
+                f"sources={','.join(hit.source_ids)}"
+            )
+        return 0
+
+    if args.command == "eval-wiki":
+        report = evaluate_wiki(
+            vault=WikiVault(root=args.wiki_root),
+            expected_source_count=args.expected_source_count,
+        )
+        _print_json_safely(asdict(report))
         return 0
 
     if args.command == "list-documents":
@@ -407,6 +510,38 @@ def _build_parser() -> argparse.ArgumentParser:
     search_chunks.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
     search_chunks.add_argument("--top-k", type=int, default=5)
 
+    evidence_parser = subparsers.add_parser("build-evidence")
+    evidence_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    evidence_parser.add_argument("--parent-max-chars", type=int, default=2400)
+    evidence_parser.add_argument("--child-max-chars", type=int, default=700)
+    evidence_parser.add_argument("--child-min-chars", type=int, default=80)
+    evidence_parser.add_argument("--span-max-chars", type=int, default=220)
+    evidence_parser.add_argument("--rebuild", action="store_true")
+
+    wiki_parser = subparsers.add_parser("build-wiki")
+    wiki_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    wiki_parser.add_argument("--wiki-root", type=Path, default=Path("data/wiki/default"))
+    wiki_parser.add_argument("--expert-id", default="default")
+    wiki_parser.add_argument("--expert-name", default="unknown")
+    wiki_parser.add_argument("--purpose", default="沉淀专家公开内容。")
+
+    search_wiki_parser = subparsers.add_parser("search-wiki")
+    search_wiki_parser.add_argument("query")
+    search_wiki_parser.add_argument(
+        "--wiki-root",
+        type=Path,
+        default=Path("data/wiki/default"),
+    )
+    search_wiki_parser.add_argument("--top-k", type=int, default=5)
+
+    eval_wiki_parser = subparsers.add_parser("eval-wiki")
+    eval_wiki_parser.add_argument(
+        "--wiki-root",
+        type=Path,
+        default=Path("data/wiki/default"),
+    )
+    eval_wiki_parser.add_argument("--expected-source-count", type=int, default=0)
+
     list_parser = subparsers.add_parser("list-documents")
     list_parser.add_argument("--author")
     list_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -594,6 +729,23 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
+    )
+
+
+def _document_evidence_from_store(
+    *,
+    document,
+    sections,
+    chunks,
+    spans,
+):
+    from expert_digest.processing.evidence_builder import DocumentEvidence
+
+    return DocumentEvidence(
+        document=document,
+        parent_sections=sections,
+        chunks=chunks,
+        evidence_spans=spans,
     )
 
 

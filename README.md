@@ -130,6 +130,30 @@ Search top chunks by semantic similarity:
 expert-digest search-chunks "泡泡玛特 IP 运营" --db data/processed/zhihu_huang.sqlite3 --top-k 5
 ```
 
+Build hierarchical evidence for Wiki Foundation:
+
+```powershell
+expert-digest build-evidence --db data/processed/zhihu_huang.sqlite3 --rebuild
+```
+
+Build an Expert Wiki vault:
+
+```powershell
+expert-digest build-wiki --db data/processed/zhihu_huang.sqlite3 --wiki-root data/wiki/huang --expert-id huang --expert-name "黄彦臻" --purpose "沉淀黄彦臻公开文章中的投资分析框架。"
+```
+
+Search the wiki:
+
+```powershell
+expert-digest search-wiki "泡泡玛特 核心能力" --wiki-root data/wiki/huang
+```
+
+Evaluate wiki quality:
+
+```powershell
+expert-digest eval-wiki --wiki-root data/wiki/huang --expected-source-count 824
+```
+
 Ask a question with structured RAG output:
 
 ```powershell
