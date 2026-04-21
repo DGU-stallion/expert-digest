@@ -88,6 +88,12 @@ Current data snapshot:
 3. Uses existing retrieval/handbook/profile/skill services (no duplicate core logic): pass
 4. Cherry Studio end-to-end runtime validation: pending (manual check required)
 
+## ExpertDigest 2.0 Wiki Foundation
+
+- Design: completed (`docs/superpowers/specs/2026-04-21-expertdigest-2-wiki-upgrade-design.md`)
+- Implementation plan: completed (`docs/superpowers/plans/2026-04-21-expertdigest-2-wiki-foundation.md`)
+- First implementation target: hierarchical evidence model + Markdown wiki vault + deterministic ingest baseline
+
 ## Next Recommended Steps (M8 Completion)
 
 1. Validate MCP server end-to-end inside Cherry Studio and add setup screenshots/notes.
