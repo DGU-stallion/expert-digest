@@ -9,6 +9,11 @@ from expert_digest.domain.models import EvidenceSpan
 from expert_digest.wiki.models import SourceAnalysis, SourceRef, WikiPage
 from expert_digest.wiki.vault import WikiVault
 
+_MAX_CONCEPT_CLAIMS = 12
+_MAX_TOPIC_SUMMARIES = 8
+_MAX_TOPIC_CONCEPTS = 12
+_MAX_PAGE_SOURCES = 24
+
 
 @dataclass(frozen=True)
 class WikiWriteResult:
@@ -50,13 +55,21 @@ def write_analysis_to_vault(
     for concept in analysis.concepts[:8]:
         path = f"concepts/{_slug(concept)}.md"
         concept_paths.append(path)
+        existing = _read_existing_page(vault=vault, path=path)
         vault.write_page(
             WikiPage(
                 path=path,
                 page_type="concept",
                 title=concept,
-                body=_render_concept_body(concept=concept, analysis=analysis),
-                sources=[source_ref],
+                body=_render_concept_body(
+                    concept=concept,
+                    analysis=analysis,
+                    existing_body=existing.body if existing else None,
+                ),
+                sources=_merge_sources(
+                    existing_sources=existing.sources if existing else [],
+                    incoming_source=source_ref,
+                ),
                 confidence=analysis.confidence,
             )
         )
@@ -65,13 +78,21 @@ def write_analysis_to_vault(
     for topic in analysis.topics[:4]:
         path = f"topics/{_slug(topic)}.md"
         topic_paths.append(path)
+        existing = _read_existing_page(vault=vault, path=path)
         vault.write_page(
             WikiPage(
                 path=path,
                 page_type="topic",
                 title=topic,
-                body=_render_topic_body(topic=topic, analysis=analysis),
-                sources=[source_ref],
+                body=_render_topic_body(
+                    topic=topic,
+                    analysis=analysis,
+                    existing_body=existing.body if existing else None,
+                ),
+                sources=_merge_sources(
+                    existing_sources=existing.sources if existing else [],
+                    incoming_source=source_ref,
+                ),
                 confidence=analysis.confidence,
             )
         )
@@ -110,23 +131,67 @@ def _render_source_body(
     return "\n".join(lines).rstrip()
 
 
-def _render_concept_body(*, concept: str, analysis: SourceAnalysis) -> str:
-    claims = (
-        "\n".join(f"- {claim}" for claim in analysis.key_claims[:3]) or "- 暂无核心判断"
+def _render_concept_body(
+    *,
+    concept: str,
+    analysis: SourceAnalysis,
+    existing_body: str | None = None,
+) -> str:
+    existing_sources = (
+        _section_bullets(existing_body, "## 来源") if existing_body else []
     )
+    existing_claims = (
+        _section_bullets(existing_body, "## 相关判断") if existing_body else []
+    )
+    sources = _dedupe_keep_order(existing_sources + [f"[[{analysis.source_title}]]"])[
+        -_MAX_PAGE_SOURCES:
+    ]
+    claims = _dedupe_keep_order(existing_claims + analysis.key_claims[:3])[
+        -_MAX_CONCEPT_CLAIMS:
+    ]
+    source_lines = "\n".join(f"- {item}" for item in sources) or "- 暂无来源"
+    claim_lines = "\n".join(f"- {claim}" for claim in claims) or "- 暂无核心判断"
     return (
         f"# {concept}\n\n"
-        f"## 来源\n\n- [[{analysis.source_title}]]\n\n"
-        f"## 相关判断\n\n{claims}\n"
+        f"## 来源\n\n{source_lines}\n\n"
+        f"## 相关判断\n\n{claim_lines}\n"
     ).rstrip()
 
 
-def _render_topic_body(*, topic: str, analysis: SourceAnalysis) -> str:
-    concepts = "、".join(f"[[{concept}]]" for concept in analysis.concepts[:6])
+def _render_topic_body(
+    *,
+    topic: str,
+    analysis: SourceAnalysis,
+    existing_body: str | None = None,
+) -> str:
+    existing_sources = (
+        _section_bullets(existing_body, "## 来源") if existing_body else []
+    )
+    existing_summaries = (
+        _section_bullets(existing_body, "## 主题摘要") if existing_body else []
+    )
+    existing_concepts = (
+        _section_bullets(existing_body, "## 相关概念") if existing_body else []
+    )
+
+    sources = _dedupe_keep_order(existing_sources + [f"[[{analysis.source_title}]]"])[
+        -_MAX_PAGE_SOURCES:
+    ]
+    summaries = _dedupe_keep_order(existing_summaries + [analysis.summary])[
+        -_MAX_TOPIC_SUMMARIES:
+    ]
+    concepts = _dedupe_keep_order(
+        existing_concepts + [f"[[{concept}]]" for concept in analysis.concepts[:6]]
+    )[-_MAX_TOPIC_CONCEPTS:]
+
+    source_lines = "\n".join(f"- {item}" for item in sources) or "- 暂无来源"
+    summary_lines = "\n".join(f"- {item}" for item in summaries) or "- 暂无摘要"
+    concept_lines = "\n".join(f"- {item}" for item in concepts) or "- 暂无"
     return (
         f"# {topic}\n\n"
-        f"## 主题摘要\n\n{analysis.summary}\n\n"
-        f"## 相关概念\n\n{concepts if concepts else '暂无'}\n"
+        f"## 来源\n\n{source_lines}\n\n"
+        f"## 主题摘要\n\n{summary_lines}\n\n"
+        f"## 相关概念\n\n{concept_lines}\n"
     ).rstrip()
 
 
@@ -163,3 +228,56 @@ def _append_index(
 def _slug(value: str) -> str:
     compact = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", value).strip("-")
     return compact.lower() or "untitled"
+
+
+def _read_existing_page(*, vault: WikiVault, path: str) -> WikiPage | None:
+    page_path = vault.root / path
+    if not page_path.exists():
+        return None
+    return vault.read_page(path)
+
+
+def _merge_sources(
+    *,
+    existing_sources: list[SourceRef],
+    incoming_source: SourceRef,
+) -> list[SourceRef]:
+    merged = list(existing_sources)
+    if any(item.source_id == incoming_source.source_id for item in merged):
+        return merged[-_MAX_PAGE_SOURCES:]
+    merged.append(incoming_source)
+    return merged[-_MAX_PAGE_SOURCES:]
+
+
+def _section_bullets(body: str, header: str) -> list[str]:
+    lines = body.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == header:
+            start = index + 1
+            break
+    if start is None:
+        return []
+
+    items: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            break
+        if stripped.startswith("- "):
+            item = stripped.removeprefix("- ").strip()
+            if item:
+                items.append(item)
+    return items
+
+
+def _dedupe_keep_order(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
