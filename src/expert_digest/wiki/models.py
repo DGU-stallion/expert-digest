@@ -33,6 +33,16 @@ class WikiSearchHit:
 
 
 @dataclass(frozen=True)
+class WikiQualityReport:
+    page_count: int
+    source_page_count: int
+    pages_with_sources: int
+    pages_missing_sources: list[str]
+    traceability_ratio: float
+    coverage_ratio: float
+
+
+@dataclass(frozen=True)
 class SourceAnalysis:
     source_id: str
     source_title: str
