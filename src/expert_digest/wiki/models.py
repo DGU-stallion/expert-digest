@@ -25,6 +25,14 @@ class WikiPage:
 
 
 @dataclass(frozen=True)
+class WikiSearchHit:
+    page: WikiPage
+    score: float
+    matched_terms: list[str]
+    source_ids: list[str]
+
+
+@dataclass(frozen=True)
 class SourceAnalysis:
     source_id: str
     source_title: str
