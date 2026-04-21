@@ -40,3 +40,43 @@ def test_analyze_document_evidence_marks_low_confidence_when_no_spans():
 
     assert analysis.confidence == "low"
     assert analysis.key_claims == []
+
+
+def test_analyze_document_evidence_filters_question_template_noise():
+    document = Document.create(
+        author="黄彦臻",
+        title="10 月 9 日 A 股大幅回调，如何看待今日行情？",
+        content=(
+            "全市场逾 200 只个股下跌。"
+            "发生了什么？"
+            "请问后续怎么走？"
+        ),
+        source="sample",
+    )
+    evidence = build_document_evidence(document, span_max_chars=30)
+
+    analysis = analyze_document_evidence(evidence)
+
+    joined_concepts = " ".join(analysis.concepts)
+    joined_topics = " ".join(analysis.topics)
+    assert "如何看待今日行情" not in joined_concepts
+    assert "发生了什么" not in joined_concepts
+    assert "请问后续怎么走" not in joined_concepts
+    assert "如何看待今日行情" not in joined_topics
+    assert "发生了什么" not in joined_topics
+    assert "请问后续怎么走" not in joined_topics
+
+
+def test_analyze_document_evidence_filters_date_fragment_noise():
+    document = Document.create(
+        author="黄彦臻",
+        title="12 月 4 日午间，比特币价格大跳水，发生了什么？",
+        content="比特币价格在一小时内快速回撤。",
+        source="sample",
+    )
+    evidence = build_document_evidence(document, span_max_chars=30)
+
+    analysis = analyze_document_evidence(evidence)
+
+    assert "日午间" not in analysis.concepts
+    assert "发生了什么" not in analysis.concepts

@@ -25,6 +25,15 @@ _STOPWORDS = {
     "我们",
 }
 _TITLE_SUFFIXES = ("复盘", "分析", "研究", "观察", "案例", "笔记", "总结", "报告")
+_QUESTION_PATTERNS = (
+    "如何看待",
+    "发生了什么",
+    "是什么意思",
+    "为什么",
+    "请问",
+    "怎么走",
+)
+_SHORT_KEEP = {"AI", "IP", "A股", "美股", "港股"}
 
 
 def analyze_document_evidence(evidence: DocumentEvidence) -> SourceAnalysis:
@@ -118,6 +127,27 @@ def _possessive_terms(text: str) -> list[str]:
 
 
 def _is_candidate(token: str) -> bool:
-    if len(token) < 2 or token in _STOPWORDS:
+    normalized = token.strip()
+    if not normalized:
         return False
-    return bool(_TOKEN_RE.fullmatch(token) or _CHINESE_RE.fullmatch(token))
+    if normalized in _STOPWORDS:
+        return False
+    if any(pattern in normalized for pattern in _QUESTION_PATTERNS):
+        return False
+    if any(char.isdigit() for char in normalized):
+        return False
+    if normalized.endswith(("吗", "呢", "么")):
+        return False
+    if normalized.startswith(("日", "月")) and len(normalized) <= 3:
+        return False
+    if len(normalized) > 20:
+        return False
+    if len(normalized) <= 2:
+        if normalized in _SHORT_KEEP:
+            return True
+        if re.fullmatch(r"[A-Z]{2,3}", normalized):
+            return True
+        return False
+    if len(normalized) < 2:
+        return False
+    return bool(_TOKEN_RE.fullmatch(normalized) or _CHINESE_RE.fullmatch(normalized))
