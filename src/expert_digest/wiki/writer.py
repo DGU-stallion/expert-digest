@@ -97,13 +97,7 @@ def write_analysis_to_vault(
             )
         )
 
-    _append_index(
-        vault=vault,
-        analysis=analysis,
-        source_path=source_path,
-        concept_paths=concept_paths,
-        topic_paths=topic_paths,
-    )
+    _rebuild_indexes(vault=vault)
     vault.append_log(
         f"- ingested source `{analysis.source_id}`: {analysis.source_title}"
     )
@@ -195,36 +189,6 @@ def _render_topic_body(
     ).rstrip()
 
 
-def _append_index(
-    *,
-    vault: WikiVault,
-    analysis: SourceAnalysis,
-    source_path: str,
-    concept_paths: list[str],
-    topic_paths: list[str],
-) -> None:
-    index_path = vault.root / "index.md"
-    text = (
-        index_path.read_text(encoding="utf-8") if index_path.exists() else "# Index\n"
-    )
-    additions = [
-        "",
-        f"## {analysis.source_title}",
-        "",
-        f"- Source: [{analysis.source_title}]({source_path})",
-    ]
-    for path in topic_paths:
-        title = path.removeprefix("topics/").removesuffix(".md")
-        additions.append(f"- Topic: [{title}]({path})")
-    for path in concept_paths[:5]:
-        title = path.removeprefix("concepts/").removesuffix(".md")
-        additions.append(f"- Concept: [{title}]({path})")
-    index_path.write_text(
-        text.rstrip() + "\n" + "\n".join(additions) + "\n",
-        encoding="utf-8",
-    )
-
-
 def _slug(value: str) -> str:
     compact = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", value).strip("-")
     return compact.lower() or "untitled"
@@ -281,3 +245,98 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
         seen.add(normalized)
         result.append(normalized)
     return result
+
+
+def _rebuild_indexes(*, vault: WikiVault) -> None:
+    source_pages = _load_section_pages(vault=vault, folder="sources")
+    topic_pages = _load_section_pages(vault=vault, folder="topics")
+    concept_pages = _load_section_pages(vault=vault, folder="concepts")
+
+    (vault.root / "sources" / "index.md").write_text(
+        _render_section_index(
+            title="Sources",
+            pages=source_pages,
+            folder="sources",
+            include_source_count=False,
+        ),
+        encoding="utf-8",
+    )
+    (vault.root / "topics" / "index.md").write_text(
+        _render_section_index(
+            title="Topics",
+            pages=topic_pages,
+            folder="topics",
+            include_source_count=True,
+        ),
+        encoding="utf-8",
+    )
+    (vault.root / "concepts" / "index.md").write_text(
+        _render_section_index(
+            title="Concepts",
+            pages=concept_pages,
+            folder="concepts",
+            include_source_count=True,
+        ),
+        encoding="utf-8",
+    )
+    (vault.root / "index.md").write_text(
+        _render_root_index(
+            source_count=len(source_pages),
+            topic_count=len(topic_pages),
+            concept_count=len(concept_pages),
+        ),
+        encoding="utf-8",
+    )
+
+
+def _load_section_pages(*, vault: WikiVault, folder: str) -> list[WikiPage]:
+    pages: list[WikiPage] = []
+    for path in sorted((vault.root / folder).glob("*.md")):
+        if path.name == "index.md":
+            continue
+        relative = f"{folder}/{path.name}"
+        pages.append(vault.read_page(relative))
+    pages.sort(key=lambda page: page.title)
+    return pages
+
+
+def _render_root_index(
+    *,
+    source_count: int,
+    topic_count: int,
+    concept_count: int,
+) -> str:
+    lines = [
+        "# Expert Wiki",
+        "",
+        "## Overview",
+        "",
+        "- [Sources](sources/index.md)",
+        "- [Topics](topics/index.md)",
+        "- [Concepts](concepts/index.md)",
+        "",
+        f"- source_pages: {source_count}",
+        f"- topic_pages: {topic_count}",
+        f"- concept_pages: {concept_count}",
+    ]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_section_index(
+    *,
+    title: str,
+    pages: list[WikiPage],
+    folder: str,
+    include_source_count: bool,
+) -> str:
+    lines = [f"# {title}", "", f"- total: {len(pages)}", ""]
+    if not pages:
+        lines.append("- (empty)")
+        return "\n".join(lines).rstrip() + "\n"
+
+    for page in pages:
+        filename = page.path.removeprefix(f"{folder}/")
+        source_count = len({source.source_id for source in page.sources})
+        suffix = f" (sources={source_count})" if include_source_count else ""
+        lines.append(f"- [{page.title}]({filename}){suffix}")
+    return "\n".join(lines).rstrip() + "\n"
