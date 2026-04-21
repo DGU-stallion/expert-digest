@@ -22,7 +22,9 @@ def evaluate_wiki(
     source_pages = [page for page in pages if page.page_type == "source"]
     pages_with_sources = [page for page in pages if page.sources]
     missing = [page.path for page in pages if not page.sources]
-    traceability_ratio = round(len(pages_with_sources) / len(pages), 4) if pages else 1.0
+    traceability_ratio = (
+        round(len(pages_with_sources) / len(pages), 4) if pages else 1.0
+    )
     coverage_ratio = (
         round(len(source_pages) / expected_source_count, 4)
         if expected_source_count > 0

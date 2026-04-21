@@ -7,7 +7,10 @@ def test_analyze_document_evidence_extracts_claims_concepts_and_topics():
     document = Document.create(
         author="黄彦臻",
         title="泡泡玛特复盘",
-        content="泡泡玛特的核心能力是 IP 运营。因为它能持续制造角色资产，所以估值不能只看玩具销售。",
+        content=(
+            "泡泡玛特的核心能力是 IP 运营。"
+            "因为它能持续制造角色资产，所以估值不能只看玩具销售。"
+        ),
         source="sample",
         url="https://example.com/popmart",
     )

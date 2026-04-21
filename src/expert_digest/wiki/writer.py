@@ -83,7 +83,9 @@ def write_analysis_to_vault(
         concept_paths=concept_paths,
         topic_paths=topic_paths,
     )
-    vault.append_log(f"- ingested source `{analysis.source_id}`: {analysis.source_title}")
+    vault.append_log(
+        f"- ingested source `{analysis.source_id}`: {analysis.source_title}"
+    )
     return {
         "sources": [source_path],
         "concepts": concept_paths,
@@ -109,7 +111,9 @@ def _render_source_body(
 
 
 def _render_concept_body(*, concept: str, analysis: SourceAnalysis) -> str:
-    claims = "\n".join(f"- {claim}" for claim in analysis.key_claims[:3]) or "- 暂无核心判断"
+    claims = (
+        "\n".join(f"- {claim}" for claim in analysis.key_claims[:3]) or "- 暂无核心判断"
+    )
     return (
         f"# {concept}\n\n"
         f"## 来源\n\n- [[{analysis.source_title}]]\n\n"
@@ -135,7 +139,9 @@ def _append_index(
     topic_paths: list[str],
 ) -> None:
     index_path = vault.root / "index.md"
-    text = index_path.read_text(encoding="utf-8") if index_path.exists() else "# Index\n"
+    text = (
+        index_path.read_text(encoding="utf-8") if index_path.exists() else "# Index\n"
+    )
     additions = [
         "",
         f"## {analysis.source_title}",

@@ -51,8 +51,12 @@ def test_list_pages_reads_nested_markdown(tmp_path):
         expert_name="黄彦臻",
         purpose="沉淀公开文章。",
     )
-    vault.write_page(WikiPage(path="topics/a.md", page_type="topic", title="A", body="A"))
-    vault.write_page(WikiPage(path="concepts/b.md", page_type="concept", title="B", body="B"))
+    vault.write_page(
+        WikiPage(path="topics/a.md", page_type="topic", title="A", body="A")
+    )
+    vault.write_page(
+        WikiPage(path="concepts/b.md", page_type="concept", title="B", body="B")
+    )
 
     pages = vault.list_pages()
     titles = sorted(page.title for page in pages)

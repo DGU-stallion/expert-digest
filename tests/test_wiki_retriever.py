@@ -12,7 +12,13 @@ def test_search_wiki_ranks_title_body_and_sources(tmp_path):
             page_type="topic",
             title="IP 运营",
             body="泡泡玛特的核心能力是 IP 运营和角色资产。",
-            sources=[SourceRef(source_id="doc-1", title="泡泡玛特复盘", evidence_span_ids=["span-1"])],
+            sources=[
+                SourceRef(
+                    source_id="doc-1",
+                    title="泡泡玛特复盘",
+                    evidence_span_ids=["span-1"],
+                )
+            ],
         )
     )
     vault.write_page(

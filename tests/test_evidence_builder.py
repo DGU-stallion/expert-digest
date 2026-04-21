@@ -7,7 +7,11 @@ def test_build_document_evidence_creates_sections_chunks_and_spans():
     document = Document.create(
         author="黄彦臻",
         title="关于泡泡玛特的极简复盘",
-        content="# 核心判断\n\n泡泡玛特的核心能力不是单纯卖潮玩，而是 IP 运营。\n\n第二段继续解释。",
+        content=(
+            "# 核心判断\n\n"
+            "泡泡玛特的核心能力不是单纯卖潮玩，而是 IP 运营。\n\n"
+            "第二段继续解释。"
+        ),
         source="sample",
         url="https://example.com/popmart",
     )
@@ -24,7 +28,8 @@ def test_build_document_evidence_creates_sections_chunks_and_spans():
     assert result.parent_sections[0].title == "核心判断"
     assert len(result.chunks) >= 2
     assert all(
-        chunk.parent_section_id == result.parent_sections[0].id for chunk in result.chunks
+        chunk.parent_section_id == result.parent_sections[0].id
+        for chunk in result.chunks
     )
     assert len(result.evidence_spans) >= 2
     assert all(

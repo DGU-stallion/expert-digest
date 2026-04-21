@@ -50,7 +50,12 @@ def test_evaluate_wiki_detects_pages_without_sources(tmp_path):
     vault = WikiVault(root=tmp_path / "wiki" / "huang")
     vault.initialize(expert_id="huang", expert_name="黄彦臻", purpose="沉淀公开文章。")
     vault.write_page(
-        WikiPage(path="topics/no-source.md", page_type="topic", title="无来源", body="没有来源。")
+        WikiPage(
+            path="topics/no-source.md",
+            page_type="topic",
+            title="无来源",
+            body="没有来源。",
+        )
     )
 
     report = evaluate_wiki(vault=vault, expected_source_count=1)

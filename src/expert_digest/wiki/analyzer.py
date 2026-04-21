@@ -30,7 +30,9 @@ _TITLE_SUFFIXES = ("复盘", "分析", "研究", "观察", "案例", "笔记", "
 def analyze_document_evidence(evidence: DocumentEvidence) -> SourceAnalysis:
     spans = evidence.evidence_spans
     claims = [_normalize(span.text) for span in spans[:5] if _normalize(span.text)]
-    concepts = _extract_concepts(evidence.document.title + "\n" + evidence.document.content)
+    concepts = _extract_concepts(
+        evidence.document.title + "\n" + evidence.document.content
+    )
     topics = _extract_topics(
         title=evidence.document.title,
         concepts=concepts,
@@ -106,7 +108,9 @@ def _title_candidates(title: str) -> list[str]:
 
 def _possessive_terms(text: str) -> list[str]:
     terms: list[str] = []
-    for match in re.finditer(r"([A-Za-z][A-Za-z0-9_+-]{1,}|[\u4e00-\u9fff]{2,})的", text):
+    for match in re.finditer(
+        r"([A-Za-z][A-Za-z0-9_+-]{1,}|[\u4e00-\u9fff]{2,})的", text
+    ):
         token = match.group(1).strip()
         if _is_candidate(token):
             terms.append(token)

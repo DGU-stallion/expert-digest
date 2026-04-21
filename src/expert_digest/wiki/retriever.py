@@ -53,7 +53,12 @@ def search_wiki(
         )
     return sorted(
         hits,
-        key=lambda item: (-item.score, item.page.page_type, item.page.title, item.page.path),
+        key=lambda item: (
+            -item.score,
+            item.page.page_type,
+            item.page.title,
+            item.page.path,
+        ),
     )[:top_k]
 
 

@@ -42,22 +42,22 @@ from expert_digest.knowledge.topic_clusterer import (
 from expert_digest.knowledge.topic_report import build_topic_report
 from expert_digest.mcp.server import run_mcp_server
 from expert_digest.processing.cleaner import clean_document
-from expert_digest.processing.evidence_builder import build_document_evidence
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
     DEFAULT_EMBEDDING_MODEL,
     embed_chunks,
     embed_text,
 )
+from expert_digest.processing.evidence_builder import build_document_evidence
 from expert_digest.processing.splitter import split_documents
 from expert_digest.rag.answering import StructuredAnswer
 from expert_digest.rag.query_service import answer_question
 from expert_digest.retrieval.retriever import rank_chunk_embeddings
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
-    clear_evidence,
     clear_chunk_embeddings,
     clear_chunks,
+    clear_evidence,
     get_documents_by_author,
     list_chunk_embeddings,
     list_chunks,
@@ -139,9 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dim=args.dim,
         )
         count = save_chunk_embeddings(args.db, embeddings)
-        print(
-            f"Embedded {count} chunk(s) with model {args.model} into {args.db}"
-        )
+        print(f"Embedded {count} chunk(s) with model {args.model} into {args.db}")
         return 0
 
     if args.command == "rebuild-embeddings":
@@ -404,9 +402,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _emit_topic_clusters(
             topics=topics,
             output_format=args.format,
-            metadata={
-                key: value for key, value in payload.items() if key != "topics"
-            },
+            metadata={key: value for key, value in payload.items() if key != "topics"},
         )
         return 0
 
@@ -520,7 +516,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     wiki_parser = subparsers.add_parser("build-wiki")
     wiki_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    wiki_parser.add_argument("--wiki-root", type=Path, default=Path("data/wiki/default"))
+    wiki_parser.add_argument(
+        "--wiki-root", type=Path, default=Path("data/wiki/default")
+    )
     wiki_parser.add_argument("--expert-id", default="default")
     wiki_parser.add_argument("--expert-name", default="unknown")
     wiki_parser.add_argument("--purpose", default="沉淀专家公开内容。")
@@ -670,7 +668,10 @@ def _emit_handbook_result(
     output_path: Path,
     synthesis_mode: str,
     llm_client: (
-        AnthropicCompatibleClient | GeminiCompatibleClient | OpenAICompatibleClient | None
+        AnthropicCompatibleClient
+        | GeminiCompatibleClient
+        | OpenAICompatibleClient
+        | None
     ),
     output_format: str,
     latency_ms: int,
@@ -803,10 +804,7 @@ def _print_author_profile(profile: dict[str, object]) -> None:
         focus_topics_text = (
             ", ".join(str(item) for item in focus_topics) if focus_topics else "(无)"
         )
-        print(
-            "Focus topics: "
-            + focus_topics_text
-        )
+        print("Focus topics: " + focus_topics_text)
     keywords = profile.get("keywords", [])
     if isinstance(keywords, list):
         print("Top keywords:")

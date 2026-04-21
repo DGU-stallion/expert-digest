@@ -30,11 +30,15 @@ class WikiVault:
         )
         self._write_if_missing(
             "schema.md",
-            "# Schema\n\n页面类型：source、concept、topic、thesis、review。\n\n核心判断必须包含 source refs。\n",
+            "# Schema\n\n"
+            "页面类型：source、concept、topic、thesis、review。\n\n"
+            "核心判断必须包含 source refs。\n",
         )
         self._write_if_missing(
             "index.md",
-            f"# {expert_name} Expert Wiki\n\n- Expert ID: `{expert_id}`\n\n## Sources\n\n## Topics\n\n## Concepts\n",
+            f"# {expert_name} Expert Wiki\n\n"
+            f"- Expert ID: `{expert_id}`\n\n"
+            "## Sources\n\n## Topics\n\n## Concepts\n",
         )
         self._write_if_missing(
             "log.md",
