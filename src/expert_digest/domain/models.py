@@ -50,6 +50,43 @@ class Document:
 
 
 @dataclass(frozen=True)
+class ParentSection:
+    """A larger context section derived from a source document."""
+
+    id: str
+    document_id: str
+    title: str
+    text: str
+    section_index: int
+    start_char: int | None = None
+    end_char: int | None = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        document_id: str,
+        title: str,
+        text: str,
+        section_index: int,
+        start_char: int | None = None,
+        end_char: int | None = None,
+    ) -> ParentSection:
+        payload = {
+            "document_id": document_id,
+            "title": title,
+            "text": text,
+            "section_index": section_index,
+            "start_char": start_char,
+            "end_char": end_char,
+        }
+        return cls(id=_stable_hash(payload), **payload)
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class Chunk:
     """A text chunk derived from a source document."""
 
@@ -59,6 +96,7 @@ class Chunk:
     chunk_index: int
     start_char: int | None = None
     end_char: int | None = None
+    parent_section_id: str | None = None
 
     @classmethod
     def create(
@@ -69,11 +107,56 @@ class Chunk:
         chunk_index: int,
         start_char: int | None = None,
         end_char: int | None = None,
+        parent_section_id: str | None = None,
     ) -> Chunk:
         payload = {
             "document_id": document_id,
             "text": text,
             "chunk_index": chunk_index,
+            "start_char": start_char,
+            "end_char": end_char,
+            "parent_section_id": parent_section_id,
+        }
+        return cls(id=_stable_hash(payload), **payload)
+
+    def to_dict(self) -> dict[str, object]:
+        data = asdict(self)
+        if self.parent_section_id is None:
+            data.pop("parent_section_id")
+        return data
+
+
+@dataclass(frozen=True)
+class EvidenceSpan:
+    """A minimum source-backed citation span used by wiki claims."""
+
+    id: str
+    document_id: str
+    parent_section_id: str
+    chunk_id: str
+    text: str
+    span_index: int
+    start_char: int | None = None
+    end_char: int | None = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        document_id: str,
+        parent_section_id: str,
+        chunk_id: str,
+        text: str,
+        span_index: int,
+        start_char: int | None = None,
+        end_char: int | None = None,
+    ) -> EvidenceSpan:
+        payload = {
+            "document_id": document_id,
+            "parent_section_id": parent_section_id,
+            "chunk_id": chunk_id,
+            "text": text,
+            "span_index": span_index,
             "start_char": start_char,
             "end_char": end_char,
         }
