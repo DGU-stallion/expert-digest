@@ -94,6 +94,15 @@ Current data snapshot:
 - Implementation plan: completed (`docs/superpowers/plans/2026-04-21-expertdigest-2-wiki-foundation.md`)
 - First implementation target: hierarchical evidence model + Markdown wiki vault + deterministic ingest baseline
 
+## Wiki Foundation Verification
+
+- Date: 2026-04-21
+- Commands:
+  - `python -m pytest -q`
+  - `.\\.venv\\Scripts\\python.exe -m ruff check . --no-cache`
+  - sample import -> build-evidence -> build-wiki -> search-wiki -> eval-wiki
+- Result: passed
+
 ## Next Recommended Steps (M8 Completion)
 
 1. Validate MCP server end-to-end inside Cherry Studio and add setup screenshots/notes.
