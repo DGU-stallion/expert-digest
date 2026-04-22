@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 from pathlib import Path
+from urllib.error import HTTPError
 
 from expert_digest.generation.llm_client import (
     AnthropicCompatibleClient,
     GeminiCompatibleClient,
     OpenAICompatibleClient,
+    _post_json,
     create_anthropic_client_from_mapping,
     create_default_handbook_llm_client,
     create_gemini_client_from_mapping,
@@ -356,3 +359,75 @@ def test_create_default_handbook_llm_client_prefers_env_gemini_over_ccswitch_ope
     )
     assert isinstance(client, GeminiCompatibleClient)
     assert client.provider == "env"
+
+
+def test_post_json_retries_on_503_then_succeeds(monkeypatch):
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    calls = {"count": 0}
+
+    def _fake_urlopen(_request, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise HTTPError(
+                url="https://example.com",
+                code=503,
+                msg="Service Unavailable",
+                hdrs=None,
+                fp=io.BytesIO(
+                    b'{"error":{"code":503,"message":"Please retry in 1s."}}'
+                ),
+            )
+        return _FakeResponse()
+
+    monkeypatch.setattr("expert_digest.generation.llm_client.urlopen", _fake_urlopen)
+    monkeypatch.setattr(
+        "expert_digest.generation.llm_client.time.sleep",
+        lambda *_a: None,
+    )
+
+    payload = _post_json(
+        url="https://example.com",
+        payload={"x": 1},
+        headers={"Content-Type": "application/json"},
+        timeout_seconds=3,
+    )
+
+    assert payload == {"ok": True}
+    assert calls["count"] == 2
+
+
+def test_post_json_does_not_retry_on_400(monkeypatch):
+    def _fake_urlopen(_request, timeout):
+        raise HTTPError(
+            url="https://example.com",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"code":400,"message":"invalid"}}'),
+        )
+
+    monkeypatch.setattr("expert_digest.generation.llm_client.urlopen", _fake_urlopen)
+    monkeypatch.setattr(
+        "expert_digest.generation.llm_client.time.sleep",
+        lambda *_a: None,
+    )
+
+    try:
+        _post_json(
+            url="https://example.com",
+            payload={"x": 1},
+            headers={"Content-Type": "application/json"},
+            timeout_seconds=3,
+        )
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as error:
+        assert "http_error 400" in str(error)

@@ -135,6 +135,37 @@ def test_cli_generate_skill_draft_returns_error_when_profile_missing(
     assert "Failed to generate skill draft" in output
 
 
+def test_cli_generate_skill_draft_handles_runtime_error_from_llm(
+    monkeypatch, capsys
+):
+    class _FakeLLMClient:
+        provider = "google"
+        model = "gemini-2.5-flash"
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: _FakeLLMClient(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.build_author_profile",
+        lambda **_kwargs: _fake_profile_dict(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.build_skill_markdown_from_profile",
+        lambda profile, llm_client: (_ for _ in ()).throw(
+            RuntimeError("http_error 429")
+        ),
+    )
+
+    exit_code = main(["generate-skill-draft"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Failed to generate skill draft" in output
+    assert "http_error 429" in output
+
+
 def test_cli_generate_skill_draft_fails_quality_gate(monkeypatch, capsys):
     monkeypatch.setattr(
         "expert_digest.cli.evaluate_wiki",

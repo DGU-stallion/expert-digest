@@ -354,7 +354,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 synthesizer=synthesizer,
             )
             output_path = write_handbook(handbook=handbook, output_path=args.output)
-        except ValueError as error:
+        except (RuntimeError, ValueError) as error:
             print(f"Failed to generate handbook: {error}")
             return 1
         if args.wiki_root_for_quality is not None:
@@ -472,7 +472,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 db_path=args.db,
                 author=args.author,
             )
-        except ValueError as error:
+        except (RuntimeError, ValueError) as error:
             print(f"Failed to generate skill draft: {error}")
             return 1
         payload = profile if isinstance(profile, dict) else asdict(profile)
@@ -481,7 +481,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload,
                 llm_client=llm_client,
             )
-        except ValueError as error:
+        except (RuntimeError, ValueError) as error:
             print(f"Failed to generate skill draft: {error}")
             return 1
         output_path = args.output

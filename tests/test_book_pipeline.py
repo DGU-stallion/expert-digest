@@ -1,6 +1,5 @@
 from expert_digest.generation.book_pipeline import (
     BookPipeline,
-    ChapterPlanItem,
     build_chapter_markdowns,
 )
 

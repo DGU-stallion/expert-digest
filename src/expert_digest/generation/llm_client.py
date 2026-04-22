@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +19,12 @@ DEFAULT_LLM_PROVIDER_DB_PATH = Path.home() / ".cc-switch" / "cc-switch.db"
 DEFAULT_CCSWITCH_DB_PATH = DEFAULT_LLM_PROVIDER_DB_PATH
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+_MAX_HTTP_RETRY = 4
+_RETRYABLE_HTTP_CODES = {429, 503}
+_RETRY_SECONDS_RE = re.compile(
+    r'"retryDelay"\s*:\s*"(?P<delay>\d+)s"|retry in (?P<retry>[0-9]+(?:\.[0-9]+)?)s',
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -548,21 +556,46 @@ def _post_json(
     headers: dict[str, str],
     timeout_seconds: int,
 ) -> dict[str, object]:
-    request = Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
-    except HTTPError as error:
-        body = error.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"http_error {error.code}: {body}") from error
-    except URLError as error:
-        raise RuntimeError(f"network_error: {error}") from error
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise RuntimeError("invalid_llm_response_type")
-    return parsed
+    body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    for attempt in range(1, _MAX_HTTP_RETRY + 1):
+        request = Request(
+            url,
+            data=body_bytes,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as error:
+            body = error.read().decode("utf-8", errors="ignore")
+            if (
+                error.code in _RETRYABLE_HTTP_CODES
+                and attempt < _MAX_HTTP_RETRY
+            ):
+                delay = _resolve_retry_delay_seconds(body=body, attempt=attempt)
+                time.sleep(delay)
+                continue
+            raise RuntimeError(f"http_error {error.code}: {body}") from error
+        except URLError as error:
+            if attempt < _MAX_HTTP_RETRY:
+                time.sleep(min(2**attempt, 10))
+                continue
+            raise RuntimeError(f"network_error: {error}") from error
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("invalid_llm_response_type")
+        return parsed
+    raise RuntimeError("llm_request_timeout")
+
+
+def _resolve_retry_delay_seconds(*, body: str, attempt: int) -> float:
+    match = _RETRY_SECONDS_RE.search(body)
+    if match is not None:
+        value = match.group("delay") or match.group("retry")
+        try:
+            parsed = float(value)
+            return min(max(parsed, 1.0), 30.0)
+        except (TypeError, ValueError):
+            pass
+    return float(min(2**attempt, 10))

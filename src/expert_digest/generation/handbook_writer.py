@@ -388,7 +388,9 @@ def build_handbook(
             rewritten_sections: list[ThemeSection] = []
             for index, section in enumerate(theme_sections):
                 chapter = chapter_markdowns[min(index, len(chapter_markdowns) - 1)]
-                chapter_name = _extract_chapter_name(chapter.title) or section.definition.name
+                chapter_name = (
+                    _extract_chapter_name(chapter.title) or section.definition.name
+                )
                 rewritten_sections.append(
                     replace(
                         section,
@@ -1070,7 +1072,9 @@ def _has_required_book_structure(markdown: str) -> bool:
     required_headings = ("## 作者简介", "## 引言", "## 目录", "## 结语")
     if not all(heading in markdown for heading in required_headings):
         return False
-    return bool(re.search(r"^## 第[一二三四五六七八九十百0-9]+章", markdown, re.MULTILINE))
+    return bool(
+        re.search(r"^## 第[一二三四五六七八九十百0-9]+章", markdown, re.MULTILINE)
+    )
 
 
 def _load_trace_payload(path: Path) -> dict[str, object] | None:

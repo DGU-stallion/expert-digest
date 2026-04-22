@@ -82,7 +82,10 @@ def test_build_handbook_supports_cluster_theme_source(monkeypatch):
     )
 
     assert "## 第一章：" in handbook.markdown
-    assert "主题组织方式：cluster（机器聚类后按人工规则命名与合并）" in handbook.markdown
+    assert (
+        "主题组织方式：cluster（机器聚类后按人工规则命名与合并）"
+        in handbook.markdown
+    )
     assert "http://" not in handbook.markdown
     assert "https://" not in handbook.markdown
 
