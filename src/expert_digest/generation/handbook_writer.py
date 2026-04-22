@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -551,44 +552,20 @@ def _render_handbook_markdown(
     theme_source: str,
     synthesis_mode: str,
 ) -> str:
-    reading_path = _build_reading_path(documents, theme_sections)
     document_ids_with_chunks = {chunk.document_id for chunk in chunks}
     docs_with_chunks = sum(
         1 for document in documents if document.id in document_ids_with_chunks
     )
     avg_chunks_per_doc = len(chunks) / len(documents) if documents else 0.0
     mode_text = {
-        "hybrid": "本版手册由混合模式生成：优先 LLM，失败时回退确定性模板。",
-        "deterministic": "本版手册由确定性模式生成：不依赖 LLM。",
+        "hybrid": "本手册由混合模式生成：使用 LLM 生成章节内容。",
+        "deterministic": "本手册由确定性模式生成：不依赖 LLM。",
     }.get(synthesis_mode, f"本版手册由 {synthesis_mode} 模式生成。")
 
     lines: list[str] = []
     lines.append(f"# {author_label}学习手册")
     lines.append("")
-    lines.append("## 简介")
-    lines.append(
-        "这是一份围绕作者公开文章构建的结构化学习手册，"
-        "目标是把分散原文整理为可执行的认知框架与阅读路径。"
-    )
-    lines.append("")
-    lines.append("## 目录")
-    lines.append("- [简介](#简介)")
-    lines.append("- [总览](#总览)")
-    lines.append("- [作者画像](#作者画像)")
-    lines.append("- [主题地图](#主题地图)")
-    lines.append("- [主题章节](#主题章节)")
-    lines.append("- [推荐阅读路径](#推荐阅读路径)")
-    lines.append("")
-    lines.append("## 总览")
-    lines.append(
-        f"当前样本包含 {len(documents)} 篇原文，切分为 {len(chunks)} 个 chunk。"
-        f"其中 {docs_with_chunks} 篇进入了主题建模，"
-        f"平均每篇约 {avg_chunks_per_doc:.2f} 个 chunk。"
-        f"主题组织方式：{theme_source}（机器聚类后按人工规则命名与合并）。"
-        f"{mode_text}"
-    )
-    lines.append("")
-    lines.append("## 作者画像")
+    lines.append("## 作者简介")
     lines.append(f"- 作者：{profile.author}")
     lines.append(f"- 文档数：{profile.document_count}")
     lines.append(
@@ -603,71 +580,60 @@ def _render_handbook_markdown(
             else "（无）"
         )
     )
+    lines.append("")
+    lines.append("## 引言")
     lines.append(
-        "- 推理模式："
-        + (
-            "、".join(item.pattern for item in profile.reasoning_patterns)
-            if profile.reasoning_patterns
-            else "（无）"
-        )
+        f"当前样本包含 {len(documents)} 篇原文，切分为 {len(chunks)} 个 chunk。"
+        f"其中 {docs_with_chunks} 篇进入了主题建模，"
+        f"平均每篇约 {avg_chunks_per_doc:.2f} 个 chunk。"
+        f"主题组织方式：{theme_source}（机器聚类后按人工规则命名与合并）。"
+        f"{mode_text}"
     )
     lines.append("")
-    lines.append("## 主题地图")
-    if not topic_clusters:
-        lines.append("- （未生成主题聚类）")
-    for index, topic in enumerate(topic_clusters, start=1):
-        lines.append(
-            f"{index}. **{topic.label}**："
-            f"{topic.chunk_count} 个证据片段，"
-            f"{len(topic.representative_documents)} 篇代表文章"
-        )
-        if topic.representative_documents:
-            references = "；".join(
-                _format_title_link(item.title, item.url)
-                for item in topic.representative_documents[:3]
-            )
-            lines.append(f"   代表文章：{references}")
-    lines.append("")
-    lines.append("## 主题章节")
+    lines.append("## 目录")
+    lines.append("- [作者简介](#作者简介)")
+    lines.append("- [引言](#引言)")
     for index, section in enumerate(theme_sections, start=1):
-        lines.append("")
-        lines.append(f"### 主题 {index}：{section.definition.name}")
-        lines.append("")
-        lines.append(f"研究问题：{section.definition.question}")
-        lines.append("")
-        lines.append("#### 主题综述")
-        lines.append(section.summary if section.summary else "（无）")
-        lines.append("")
-        lines.append("#### 文章池（Top）")
-        if not section.representative_documents:
-            lines.append("- （无）")
-        else:
-            for doc_index, item in enumerate(
-                section.representative_documents,
-                start=1,
-            ):
-                lines.append(
-                    f"- {doc_index}. score={item.score:.4f} "
-                    f"{_format_title_link(item.title, item.url)}"
-                )
-        lines.append("")
-        lines.append("#### 观点蒸馏")
-        if not section.evidence:
-            lines.append("- （无）")
-        else:
-            for evidence_index, evidence in enumerate(section.evidence, start=1):
-                lines.append(
-                    f"- {evidence_index}. score={evidence.score:.4f} "
-                    f"{_format_title_link(evidence.title, evidence.url)} | "
-                    f"{_clip(evidence.text, limit=120)}"
-                )
-    lines.append("")
-    lines.append("## 推荐阅读路径")
-    for index, document in enumerate(reading_path, start=1):
+        chapter_label = _chapter_label(index)
         lines.append(
-            f"{index}. {_format_title_link(document.title, document.url)} "
-            f"（作者：{document.author}）"
+            f"- [{chapter_label}：{section.definition.name}]"
+            f"(#{chapter_label}{section.definition.name})"
         )
+    lines.append("- [结语](#结语)")
+    lines.append("")
+
+    for index, section in enumerate(theme_sections, start=1):
+        chapter_label = _chapter_label(index)
+        cleaned_summary = _strip_urls(section.summary if section.summary else "（无）")
+        key_points = _collect_key_points(section.evidence)
+        lines.append("")
+        lines.append(f"## {chapter_label}：{section.definition.name}")
+        lines.append("")
+        lines.append("### 本章目标")
+        lines.append(_strip_urls(section.definition.question))
+        lines.append("")
+        lines.append("### 核心内容")
+        lines.append(cleaned_summary)
+        lines.append("")
+        lines.append("### 关键要点")
+        if not key_points:
+            lines.append("- （无）")
+        else:
+            for point in key_points:
+                lines.append(f"- {point}")
+        lines.append("")
+        lines.append("### 本章小结")
+        lines.append(
+            "本章围绕上述框架完成核心概念梳理。建议把要点转化为可执行清单，"
+            "并在后续章节中对照验证。"
+        )
+
+    lines.append("")
+    lines.append("## 结语")
+    lines.append(
+        "本手册将分散内容重编排为连续学习路径。建议按章节顺序学习，"
+        "每章形成自己的复盘笔记，再回到实践场景中验证并迭代。"
+    )
     lines.append("")
     return "\n".join(lines)
 
@@ -724,6 +690,43 @@ def _clip(text: str, *, limit: int = 100) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 1].rstrip() + "…"
+
+
+def _strip_urls(text: str) -> str:
+    return re.sub(r"https?://\S+", "", text).strip()
+
+
+def _collect_key_points(evidence: list[RetrievedChunk], *, limit: int = 5) -> list[str]:
+    points: list[str] = []
+    seen: set[str] = set()
+    for item in evidence:
+        candidate = _strip_urls(_clip(item.text, limit=120))
+        if not candidate:
+            continue
+        key = _normalize_text(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        points.append(candidate)
+        if len(points) >= limit:
+            break
+    return points
+
+
+def _chapter_label(index: int) -> str:
+    numerals = {
+        1: "第一章",
+        2: "第二章",
+        3: "第三章",
+        4: "第四章",
+        5: "第五章",
+        6: "第六章",
+        7: "第七章",
+        8: "第八章",
+        9: "第九章",
+        10: "第十章",
+    }
+    return numerals.get(index, f"第{index}章")
 
 
 def _is_low_quality_summary(text: str) -> bool:

@@ -81,11 +81,10 @@ def test_build_handbook_supports_cluster_theme_source(monkeypatch):
         synthesizer=DeterministicThemeSynthesizer(),
     )
 
-    assert "泡泡玛特复盘" in handbook.markdown
-    assert (
-        "主题组织方式：cluster（机器聚类后按人工规则命名与合并）"
-        in handbook.markdown
-    )
+    assert "## 第一章：" in handbook.markdown
+    assert "主题组织方式：cluster（机器聚类后按人工规则命名与合并）" in handbook.markdown
+    assert "http://" not in handbook.markdown
+    assert "https://" not in handbook.markdown
 
 
 def test_build_handbook_cluster_falls_back_to_preset_when_no_topics(monkeypatch):
@@ -122,7 +121,7 @@ def test_build_handbook_cluster_falls_back_to_preset_when_no_topics(monkeypatch)
         synthesizer=DeterministicThemeSynthesizer(),
     )
 
-    assert "主题 1：核心能力与方法" in handbook.markdown
+    assert "## 第一章：核心能力与方法" in handbook.markdown
 
 
 def test_build_handbook_rejects_unsupported_theme_source(monkeypatch):
@@ -218,4 +217,4 @@ def test_build_handbook_cluster_applies_manual_topic_taxonomy(monkeypatch, tmp_p
         synthesizer=DeterministicThemeSynthesizer(),
     )
 
-    assert "股票主题" in handbook.markdown
+    assert "## 第一章：股票主题" in handbook.markdown

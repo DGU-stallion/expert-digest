@@ -88,17 +88,16 @@ def test_build_handbook_contains_required_sections_and_sources(tmp_path: Path):
     markdown = output_path.read_text(encoding="utf-8")
     assert handbook.author == "黄彦臻"
     assert len(handbook.source_document_ids) >= 2
-    assert "## 简介" in markdown
+    assert "## 作者简介" in markdown
+    assert "## 引言" in markdown
     assert "## 目录" in markdown
-    assert "## 总览" in markdown
-    assert "## 作者画像" in markdown
-    assert "## 主题地图" in markdown
-    assert "## 主题章节" in markdown
-    assert "#### 主题综述" in markdown
-    assert "#### 文章池（Top）" in markdown
-    assert "#### 观点蒸馏" in markdown
-    assert "## 推荐阅读路径" in markdown
-    assert "本版手册由混合模式生成" in markdown
+    assert "## 第一章：" in markdown
+    assert "## 结语" in markdown
+    assert "## 推荐阅读路径" not in markdown
+    assert "文章池（Top）" not in markdown
+    assert "http://" not in markdown
+    assert "https://" not in markdown
+    assert "本手册由混合模式生成" in markdown
 
 
 def test_build_handbook_deterministic_mode_text(tmp_path: Path):
@@ -111,7 +110,7 @@ def test_build_handbook_deterministic_mode_text(tmp_path: Path):
         synthesizer=DeterministicThemeSynthesizer(),
     )
 
-    assert "本版手册由确定性模式生成：不依赖 LLM。" in handbook.markdown
+    assert "本手册由确定性模式生成：不依赖 LLM。" in handbook.markdown
 
 
 def test_hybrid_theme_synthesizer_prefers_llm_when_client_available():
