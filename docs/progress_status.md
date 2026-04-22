@@ -108,3 +108,20 @@ Current data snapshot:
 1. Validate MCP server end-to-end inside Cherry Studio and add setup screenshots/notes.
 2. Add auth/config wrapper for multi-database routing if one workspace serves multiple experts.
 3. Add MCP integration tests (tool-call contract and failure-path assertions with mock client).
+
+## Handbook/Skill LLM-Only Verification (2026-04-22)
+
+- Branch: `codex/wiki-quality-pass-1`
+- Commands:
+  - `python -m pytest -q` -> `173 passed`
+  - `.\\.venv\\Scripts\\python.exe -m ruff check .` -> `All checks passed`
+  - `.\\.venv\\Scripts\\expert-digest.exe build-evidence --db data/processed/zhihu_huang.sqlite3 --rebuild`
+  - `.\\.venv\\Scripts\\expert-digest.exe build-wiki --db data/processed/zhihu_huang.sqlite3 --wiki-root data/wiki/huang_ready_v2 --expert-id huang --expert-name "黄彦臻" --purpose "沉淀黄彦臻公开文章中的投资分析框架。"`
+  - `.\\.venv\\Scripts\\expert-digest.exe eval-wiki --wiki-root data/wiki/huang_ready_v2 --expected-source-count 824`
+  - `.\\.venv\\Scripts\\expert-digest.exe lint-wiki --wiki-root data/wiki/huang_ready_v2`
+- Wiki quality result:
+  - eval: `traceability_ratio=1.0`, `coverage_ratio=1.0`
+  - lint: `issue_count=2`
+- LLM generation status:
+  - `generate-handbook` / `generate-skill-draft` 已切换为 LLM-only 且失败时返回可读错误信息。
+  - 真实生成被 Gemini 免费配额阻塞（HTTP 429: `GenerateRequestsPerDayPerProjectPerModel-FreeTier` 达到上限 20）。
