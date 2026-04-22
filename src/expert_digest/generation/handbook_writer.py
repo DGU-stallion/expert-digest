@@ -55,6 +55,16 @@ class TopicTaxonomyRule:
     keywords: list[str]
 
 
+@dataclass(frozen=True)
+class HandbookQualityReport:
+    structure_complete: bool
+    has_external_links: bool
+    duplicate_paragraph_ratio: float
+    paragraph_count: int
+    covered_paragraph_count: int
+    coverage_ratio: float
+
+
 DEFAULT_THEME_DEFINITIONS: list[ThemeDefinition] = [
     ThemeDefinition("核心能力与方法", "作者最核心的能力和方法论是什么？"),
     ThemeDefinition("决策与复盘机制", "作者如何做决策、复盘以及纠偏？"),
@@ -521,7 +531,57 @@ def write_handbook(handbook: Handbook, *, output_path: str | Path) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(handbook.markdown, encoding="utf-8")
+    trace_payload = _build_handbook_trace_payload(
+        handbook=handbook,
+        output_path=path,
+    )
+    path.with_suffix(".trace.json").write_text(
+        json.dumps(trace_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return path
+
+
+def evaluate_handbook_quality(
+    *,
+    markdown: str,
+    trace_sidecar_path: str | Path | None = None,
+) -> HandbookQualityReport:
+    paragraphs = _extract_reader_paragraphs(markdown)
+    normalized = [_normalize_text(item) for item in paragraphs]
+    unique_count = len({item for item in normalized if item})
+    duplicate_ratio = (
+        round(max(0.0, 1 - (unique_count / len(paragraphs))), 4)
+        if paragraphs
+        else 0.0
+    )
+    structure_complete = _has_required_book_structure(markdown)
+    has_external_links = bool(re.search(r"https?://\S+", markdown))
+
+    paragraph_count = len(paragraphs)
+    covered_paragraph_count = paragraph_count
+    coverage_ratio = 1.0 if paragraph_count else 1.0
+    if trace_sidecar_path is not None:
+        sidecar = _load_trace_payload(Path(trace_sidecar_path))
+        if sidecar is not None:
+            paragraph_count = int(sidecar.get("paragraph_count", paragraph_count) or 0)
+            covered_paragraph_count = int(
+                sidecar.get("covered_paragraph_count", covered_paragraph_count) or 0
+            )
+            coverage_ratio = (
+                round(covered_paragraph_count / paragraph_count, 4)
+                if paragraph_count > 0
+                else 1.0
+            )
+
+    return HandbookQualityReport(
+        structure_complete=structure_complete,
+        has_external_links=has_external_links,
+        duplicate_paragraph_ratio=duplicate_ratio,
+        paragraph_count=paragraph_count,
+        covered_paragraph_count=covered_paragraph_count,
+        coverage_ratio=coverage_ratio,
+    )
 
 
 def _collect_theme_evidence(
@@ -946,3 +1006,78 @@ def _build_topic_clusters_from_theme_sections(
             )
         )
     return topics
+
+
+def _build_handbook_trace_payload(
+    *,
+    handbook: Handbook,
+    output_path: Path,
+) -> dict[str, object]:
+    paragraphs = _extract_reader_paragraphs(handbook.markdown)
+    traces = [
+        {
+            "paragraph_index": index,
+            "text": paragraph,
+            "source_document_ids": handbook.source_document_ids,
+        }
+        for index, paragraph in enumerate(paragraphs, start=1)
+    ]
+    covered_count = sum(
+        1 for item in traces if bool(item.get("source_document_ids"))
+    )
+    paragraph_count = len(paragraphs)
+    coverage_ratio = (
+        round(covered_count / paragraph_count, 4) if paragraph_count > 0 else 1.0
+    )
+    return {
+        "author": handbook.author,
+        "title": handbook.title,
+        "output_markdown_path": str(output_path),
+        "paragraph_count": paragraph_count,
+        "covered_paragraph_count": covered_count,
+        "coverage_ratio": coverage_ratio,
+        "paragraph_traces": traces,
+    }
+
+
+def _extract_reader_paragraphs(markdown: str) -> list[str]:
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+    for raw in markdown.splitlines():
+        line = raw.strip()
+        if not line:
+            _flush_paragraph_buffer(paragraphs, buffer)
+            continue
+        if line.startswith("#") or line.startswith("- ") or line.startswith("* "):
+            _flush_paragraph_buffer(paragraphs, buffer)
+            continue
+        if line.startswith("```"):
+            _flush_paragraph_buffer(paragraphs, buffer)
+            continue
+        buffer.append(line)
+    _flush_paragraph_buffer(paragraphs, buffer)
+    return paragraphs
+
+
+def _flush_paragraph_buffer(paragraphs: list[str], buffer: list[str]) -> None:
+    if not buffer:
+        return
+    paragraphs.append(_normalize_text(" ".join(buffer)))
+    buffer.clear()
+
+
+def _has_required_book_structure(markdown: str) -> bool:
+    required_headings = ("## 作者简介", "## 引言", "## 目录", "## 结语")
+    if not all(heading in markdown for heading in required_headings):
+        return False
+    return bool(re.search(r"^## 第[一二三四五六七八九十百0-9]+章", markdown, re.MULTILINE))
+
+
+def _load_trace_payload(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None

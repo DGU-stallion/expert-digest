@@ -635,6 +635,71 @@ def test_cli_generate_handbook_fails_quality_gate(monkeypatch, capsys):
     assert "Failed quality gate" in output
 
 
+def test_cli_generate_handbook_fails_post_quality_gate_on_external_links(
+    monkeypatch, capsys, tmp_path
+):
+    class _FakeLLMClient:
+        provider = "google"
+        model = "gemini-2.5-flash"
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+    handbook = Handbook(
+        author="黄彦臻",
+        title="黄彦臻学习手册",
+        markdown="# 手册\n",
+        source_document_ids=["doc-1"],
+    )
+    wiki_root = tmp_path / "wiki"
+    wiki_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "expert_digest.cli.evaluate_wiki",
+        lambda **_kwargs: type(
+            "Report",
+            (),
+            {"traceability_ratio": 1.0, "coverage_ratio": 1.0},
+        )(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.lint_wiki",
+        lambda **_kwargs: type("Lint", (), {"issue_count": 0})(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: _FakeLLMClient(),
+    )
+    monkeypatch.setattr("expert_digest.cli.build_handbook", lambda **_kwargs: handbook)
+    monkeypatch.setattr(
+        "expert_digest.cli.write_handbook",
+        lambda *, handbook, output_path: Path(output_path),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.evaluate_handbook_quality",
+        lambda **_kwargs: type(
+            "HandbookQuality",
+            (),
+            {
+                "structure_complete": True,
+                "has_external_links": True,
+                "duplicate_paragraph_ratio": 0.0,
+                "coverage_ratio": 1.0,
+            },
+        )(),
+    )
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--wiki-root-for-quality",
+            str(wiki_root),
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "handbook_has_external_links" in output
+
+
 def test_print_json_safely_falls_back_when_terminal_encoding_rejects_unicode(
     monkeypatch,
 ):

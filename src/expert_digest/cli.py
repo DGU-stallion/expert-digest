@@ -16,6 +16,7 @@ from expert_digest.generation.handbook_writer import (
     DeterministicThemeSynthesizer,
     HybridThemeSynthesizer,
     build_handbook,
+    evaluate_handbook_quality,
     write_handbook,
 )
 from expert_digest.generation.llm_client import (
@@ -356,6 +357,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as error:
             print(f"Failed to generate handbook: {error}")
             return 1
+        if args.wiki_root_for_quality is not None:
+            post_error = _run_handbook_output_quality_gate(
+                markdown=handbook.markdown,
+                trace_sidecar_path=output_path.with_suffix(".trace.json"),
+                max_duplicate_ratio=args.max_handbook_duplicate_ratio_for_quality,
+            )
+            if post_error is not None:
+                print(f"Failed quality gate: {post_error}")
+                return 1
         runtime_metadata = _collect_synthesis_runtime_metadata(synthesizer)
         payload = _emit_handbook_result(
             handbook=handbook,
@@ -647,6 +657,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=40,
     )
+    handbook_parser.add_argument(
+        "--max-handbook-duplicate-ratio-for-quality",
+        type=float,
+        default=0.35,
+    )
 
     cluster_parser = subparsers.add_parser("cluster-topics")
     cluster_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -861,6 +876,32 @@ def _run_generation_quality_gate(
             f"issue_count={lint_report.issue_count} exceeds "
             f"max_lint_issues={max_lint_issues}"
         )
+    return None
+
+
+def _run_handbook_output_quality_gate(
+    *,
+    markdown: str,
+    trace_sidecar_path: Path,
+    max_duplicate_ratio: float,
+) -> str | None:
+    if max_duplicate_ratio < 0:
+        return "max_handbook_duplicate_ratio_for_quality must be >= 0"
+    report = evaluate_handbook_quality(
+        markdown=markdown,
+        trace_sidecar_path=trace_sidecar_path,
+    )
+    if not report.structure_complete:
+        return "handbook_structure_incomplete"
+    if report.has_external_links:
+        return "handbook_has_external_links"
+    if report.duplicate_paragraph_ratio > max_duplicate_ratio:
+        return (
+            "handbook_duplicate_ratio_exceeded: "
+            f"{report.duplicate_paragraph_ratio} > {max_duplicate_ratio}"
+        )
+    if report.coverage_ratio < 1.0:
+        return f"handbook_trace_coverage_incomplete: {report.coverage_ratio} < 1.0"
     return None
 
 
