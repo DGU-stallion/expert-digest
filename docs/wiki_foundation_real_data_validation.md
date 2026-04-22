@@ -208,3 +208,72 @@ Quality report:
 ### 后续建议
 
 下一轮应继续收紧 analyzer 规则（尤其是标题归一化与低信息短语过滤），并增加针对真实噪声样本的回归测试，直到 concept/topic 总量相对基线出现稳定下降。
+
+## 2026-04-22 Wiki Quality Pass 1B 复跑（目标 B）
+
+### 目标定义
+
+按 2026-04-21 基线（topic=2866, concept=5640）计算，目标 B 为至少下降 5%：
+
+- Topic pages 目标：`<= 2722`
+- Concept pages 目标：`<= 5358`
+
+### 复跑说明
+
+- 使用全新目录：`data/wiki/huang_pass1b`。
+- 数据源保持不变：`data/processed/zhihu_huang.sqlite3`（824 篇）。
+- 本轮仅收紧 analyzer（deterministic 规则 + 配额），writer/index 语义不变。
+
+### 执行命令
+
+```powershell
+.\.venv\Scripts\expert-digest.exe build-wiki --db data/processed/zhihu_huang.sqlite3 --wiki-root data/wiki/huang_pass1b --expert-id huang --expert-name "黄彦臻" --purpose "沉淀黄彦臻公开文章中的投资分析框架。"
+.\.venv\Scripts\expert-digest.exe search-wiki "泡泡玛特 核心能力" --wiki-root data/wiki/huang_pass1b
+.\.venv\Scripts\expert-digest.exe eval-wiki --wiki-root data/wiki/huang_pass1b --expected-source-count 824
+```
+
+### 结果指标（Pass 1B）
+
+- Source pages: 824
+- Topic pages: 2052
+- Concept pages: 4445
+- Total evaluated wiki pages: 7321
+- Markdown files in vault: 7328
+- Vault Markdown size: 12,395,956 bytes
+- `index.md` size: 192 bytes
+- `sources/index.md` size: 124,152 bytes
+- `topics/index.md` size: 146,296 bytes
+- `concepts/index.md` size: 309,488 bytes
+- `log.md` size: 134,844 bytes
+
+Quality report:
+
+```json
+{
+  "page_count": 7321,
+  "source_page_count": 824,
+  "pages_with_sources": 7321,
+  "pages_missing_sources": [],
+  "traceability_ratio": 1.0,
+  "coverage_ratio": 1.0
+}
+```
+
+### 与基线 / Pass 1 对比
+
+| 指标 | 2026-04-21 基线 | 2026-04-22 Pass 1 | 2026-04-22 Pass 1B |
+| --- | ---:| ---:| ---:|
+| Source pages | 824 | 824 | 824 |
+| Topic pages | 2866 | 2961 | 2052 |
+| Concept pages | 5640 | 5757 | 4445 |
+| Evaluated wiki pages | 9330 | 9542 | 7321 |
+| `traceability_ratio` | 1.0 | 1.0 | 1.0 |
+| `coverage_ratio` | 1.0 | 1.0 | 1.0 |
+
+### 目标 B 验收结论
+
+- Topic pages：`2052 <= 2722`，达成。
+- Concept pages：`4445 <= 5358`，达成。
+- 来源回溯与覆盖率仍为 1.0，达成。
+
+结论：Pass 1B 在保持 deterministic 与可追溯性的前提下，完成了“较基线下降至少 5%”目标。
