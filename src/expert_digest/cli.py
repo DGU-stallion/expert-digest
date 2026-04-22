@@ -48,6 +48,7 @@ from expert_digest.processing.embedder import (
     embed_chunks,
     embed_text,
 )
+from expert_digest.processing.evidence_builder import build_document_evidence
 from expert_digest.processing.splitter import split_documents
 from expert_digest.rag.answering import StructuredAnswer
 from expert_digest.rag.query_service import answer_question
@@ -56,14 +57,25 @@ from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
     clear_chunk_embeddings,
     clear_chunks,
+    clear_evidence,
     get_documents_by_author,
     list_chunk_embeddings,
     list_chunks,
     list_documents,
+    list_evidence_spans,
+    list_parent_sections,
     save_chunk_embeddings,
     save_chunks,
     save_documents,
+    save_evidence_spans,
+    save_parent_sections,
 )
+from expert_digest.wiki.analyzer import analyze_document_evidence
+from expert_digest.wiki.evaluator import evaluate_wiki
+from expert_digest.wiki.linter import lint_wiki
+from expert_digest.wiki.retriever import search_wiki
+from expert_digest.wiki.vault import WikiVault
+from expert_digest.wiki.writer import write_analysis_to_vault
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -128,9 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dim=args.dim,
         )
         count = save_chunk_embeddings(args.db, embeddings)
-        print(
-            f"Embedded {count} chunk(s) with model {args.model} into {args.db}"
-        )
+        print(f"Embedded {count} chunk(s) with model {args.model} into {args.db}")
         return 0
 
     if args.command == "rebuild-embeddings":
@@ -176,6 +186,103 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"score={item.score:.4f}\t{title}\t{snippet}")
         return 0
 
+    if args.command == "build-evidence":
+        documents = list_documents(args.db)
+        removed = (
+            clear_evidence(args.db)
+            if args.rebuild
+            else {"parent_sections": 0, "chunks": 0, "evidence_spans": 0}
+        )
+        all_sections = []
+        all_chunks = []
+        all_spans = []
+        for document in documents:
+            evidence = build_document_evidence(
+                clean_document(document),
+                parent_max_chars=args.parent_max_chars,
+                child_max_chars=args.child_max_chars,
+                child_min_chars=args.child_min_chars,
+                span_max_chars=args.span_max_chars,
+            )
+            all_sections.extend(evidence.parent_sections)
+            all_chunks.extend(evidence.chunks)
+            all_spans.extend(evidence.evidence_spans)
+        save_parent_sections(args.db, all_sections)
+        save_chunks(args.db, all_chunks)
+        save_evidence_spans(args.db, all_spans)
+        print(
+            "Built evidence: "
+            f"documents={len(documents)} sections={len(all_sections)} "
+            f"chunks={len(all_chunks)} spans={len(all_spans)} "
+            f"cleared={removed}"
+        )
+        return 0
+
+    if args.command == "build-wiki":
+        vault = WikiVault(root=args.wiki_root)
+        vault.initialize(
+            expert_id=args.expert_id,
+            expert_name=args.expert_name,
+            purpose=args.purpose,
+        )
+        documents = list_documents(args.db)
+        sections = list_parent_sections(args.db)
+        spans = list_evidence_spans(args.db)
+        chunks = list_chunks(args.db)
+        sections_by_document = {}
+        for section in sections:
+            sections_by_document.setdefault(section.document_id, []).append(section)
+        chunks_by_document = {}
+        for chunk in chunks:
+            chunks_by_document.setdefault(chunk.document_id, []).append(chunk)
+        spans_by_document = {}
+        for span in spans:
+            spans_by_document.setdefault(span.document_id, []).append(span)
+        written_sources = 0
+        for document in documents:
+            evidence = _document_evidence_from_store(
+                document=document,
+                sections=sections_by_document.get(document.id, []),
+                chunks=chunks_by_document.get(document.id, []),
+                spans=spans_by_document.get(document.id, []),
+            )
+            analysis = analyze_document_evidence(evidence)
+            write_analysis_to_vault(
+                vault=vault,
+                analysis=analysis,
+                evidence_spans=evidence.evidence_spans,
+            )
+            written_sources += 1
+        print(f"Built wiki: sources={written_sources} root={args.wiki_root}")
+        return 0
+
+    if args.command == "search-wiki":
+        hits = search_wiki(
+            vault=WikiVault(root=args.wiki_root),
+            query=args.query,
+            top_k=args.top_k,
+        )
+        for hit in hits:
+            print(
+                f"score={hit.score:.2f}\t{hit.page.page_type}\t"
+                f"{hit.page.title}\t{hit.page.path}\t"
+                f"sources={','.join(hit.source_ids)}"
+            )
+        return 0
+
+    if args.command == "eval-wiki":
+        report = evaluate_wiki(
+            vault=WikiVault(root=args.wiki_root),
+            expected_source_count=args.expected_source_count,
+        )
+        _print_json_safely(asdict(report))
+        return 0
+
+    if args.command == "lint-wiki":
+        report = lint_wiki(vault=WikiVault(root=args.wiki_root))
+        _print_json_safely(asdict(report))
+        return 0
+
     if args.command == "list-documents":
         documents = (
             get_documents_by_author(args.db, args.author)
@@ -204,6 +311,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-handbook":
+        if args.wiki_root_for_quality is not None:
+            error = _run_generation_quality_gate(
+                wiki_root=args.wiki_root_for_quality,
+                expected_source_count=args.expected_source_count_for_quality,
+                max_lint_issues=args.max_lint_issues_for_quality,
+            )
+            if error is not None:
+                print(f"Failed quality gate: {error}")
+                return 1
         llm_client: (
             AnthropicCompatibleClient
             | GeminiCompatibleClient
@@ -301,9 +417,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _emit_topic_clusters(
             topics=topics,
             output_format=args.format,
-            metadata={
-                key: value for key, value in payload.items() if key != "topics"
-            },
+            metadata={key: value for key, value in payload.items() if key != "topics"},
         )
         return 0
 
@@ -325,6 +439,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-skill-draft":
+        if args.wiki_root_for_quality is not None:
+            error = _run_generation_quality_gate(
+                wiki_root=args.wiki_root_for_quality,
+                expected_source_count=args.expected_source_count_for_quality,
+                max_lint_issues=args.max_lint_issues_for_quality,
+            )
+            if error is not None:
+                print(f"Failed quality gate: {error}")
+                return 1
         try:
             profile = build_author_profile(
                 db_path=args.db,
@@ -407,6 +530,47 @@ def _build_parser() -> argparse.ArgumentParser:
     search_chunks.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
     search_chunks.add_argument("--top-k", type=int, default=5)
 
+    evidence_parser = subparsers.add_parser("build-evidence")
+    evidence_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    evidence_parser.add_argument("--parent-max-chars", type=int, default=2400)
+    evidence_parser.add_argument("--child-max-chars", type=int, default=700)
+    evidence_parser.add_argument("--child-min-chars", type=int, default=80)
+    evidence_parser.add_argument("--span-max-chars", type=int, default=220)
+    evidence_parser.add_argument("--rebuild", action="store_true")
+
+    wiki_parser = subparsers.add_parser("build-wiki")
+    wiki_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    wiki_parser.add_argument(
+        "--wiki-root", type=Path, default=Path("data/wiki/default")
+    )
+    wiki_parser.add_argument("--expert-id", default="default")
+    wiki_parser.add_argument("--expert-name", default="unknown")
+    wiki_parser.add_argument("--purpose", default="沉淀专家公开内容。")
+
+    search_wiki_parser = subparsers.add_parser("search-wiki")
+    search_wiki_parser.add_argument("query")
+    search_wiki_parser.add_argument(
+        "--wiki-root",
+        type=Path,
+        default=Path("data/wiki/default"),
+    )
+    search_wiki_parser.add_argument("--top-k", type=int, default=5)
+
+    eval_wiki_parser = subparsers.add_parser("eval-wiki")
+    eval_wiki_parser.add_argument(
+        "--wiki-root",
+        type=Path,
+        default=Path("data/wiki/default"),
+    )
+    eval_wiki_parser.add_argument("--expected-source-count", type=int, default=0)
+
+    lint_wiki_parser = subparsers.add_parser("lint-wiki")
+    lint_wiki_parser.add_argument(
+        "--wiki-root",
+        type=Path,
+        default=Path("data/wiki/default"),
+    )
+
     list_parser = subparsers.add_parser("list-documents")
     list_parser.add_argument("--author")
     list_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -456,6 +620,17 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
     handbook_parser.add_argument("--format", choices=["text", "json"], default="text")
     handbook_parser.add_argument("--save-run-metadata", type=Path, default=None)
+    handbook_parser.add_argument("--wiki-root-for-quality", type=Path, default=None)
+    handbook_parser.add_argument(
+        "--expected-source-count-for-quality",
+        type=int,
+        default=0,
+    )
+    handbook_parser.add_argument(
+        "--max-lint-issues-for-quality",
+        type=int,
+        default=40,
+    )
 
     cluster_parser = subparsers.add_parser("cluster-topics")
     cluster_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -492,6 +667,17 @@ def _build_parser() -> argparse.ArgumentParser:
     skill_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     skill_parser.add_argument("--author")
     skill_parser.add_argument("--output", type=Path, default=None)
+    skill_parser.add_argument("--wiki-root-for-quality", type=Path, default=None)
+    skill_parser.add_argument(
+        "--expected-source-count-for-quality",
+        type=int,
+        default=0,
+    )
+    skill_parser.add_argument(
+        "--max-lint-issues-for-quality",
+        type=int,
+        default=40,
+    )
 
     mcp_parser = subparsers.add_parser("run-mcp-server")
     mcp_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -535,7 +721,10 @@ def _emit_handbook_result(
     output_path: Path,
     synthesis_mode: str,
     llm_client: (
-        AnthropicCompatibleClient | GeminiCompatibleClient | OpenAICompatibleClient | None
+        AnthropicCompatibleClient
+        | GeminiCompatibleClient
+        | OpenAICompatibleClient
+        | None
     ),
     output_format: str,
     latency_ms: int,
@@ -597,6 +786,58 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
     )
 
 
+def _run_generation_quality_gate(
+    *,
+    wiki_root: Path,
+    expected_source_count: int,
+    max_lint_issues: int,
+) -> str | None:
+    if expected_source_count < 0:
+        return "expected_source_count_for_quality must be >= 0"
+    if max_lint_issues < 0:
+        return "max_lint_issues_for_quality must be >= 0"
+    if not wiki_root.exists():
+        return f"wiki root not found: {wiki_root}"
+
+    vault = WikiVault(root=wiki_root)
+    eval_report = evaluate_wiki(
+        vault=vault,
+        expected_source_count=expected_source_count,
+    )
+    if eval_report.traceability_ratio < 1.0:
+        return f"traceability_ratio={eval_report.traceability_ratio} < 1.0"
+    if expected_source_count > 0 and eval_report.coverage_ratio < 1.0:
+        return (
+            f"coverage_ratio={eval_report.coverage_ratio} < 1.0 "
+            f"(expected_source_count={expected_source_count})"
+        )
+
+    lint_report = lint_wiki(vault=vault)
+    if lint_report.issue_count > max_lint_issues:
+        return (
+            f"issue_count={lint_report.issue_count} exceeds "
+            f"max_lint_issues={max_lint_issues}"
+        )
+    return None
+
+
+def _document_evidence_from_store(
+    *,
+    document,
+    sections,
+    chunks,
+    spans,
+):
+    from expert_digest.processing.evidence_builder import DocumentEvidence
+
+    return DocumentEvidence(
+        document=document,
+        parent_sections=sections,
+        chunks=chunks,
+        evidence_spans=spans,
+    )
+
+
 def _emit_topic_clusters(
     *,
     topics: list[TopicCluster],
@@ -651,10 +892,7 @@ def _print_author_profile(profile: dict[str, object]) -> None:
         focus_topics_text = (
             ", ".join(str(item) for item in focus_topics) if focus_topics else "(无)"
         )
-        print(
-            "Focus topics: "
-            + focus_topics_text
-        )
+        print("Focus topics: " + focus_topics_text)
     keywords = profile.get("keywords", [])
     if isinstance(keywords, list):
         print("Top keywords:")

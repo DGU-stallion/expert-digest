@@ -12,6 +12,7 @@ from expert_digest.storage.sqlite_store import get_documents_by_author, list_doc
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z]{3,}|[\u4e00-\u9fff]{2,}")
 _TITLE_SPLIT_PATTERN = re.compile(r"[\s:：,，。;；、\-_/|]+")
+_TOPIC_KEEP = {"AI", "IP", "A股", "美股", "港股"}
 _STOPWORDS = {
     "我们",
     "你们",
@@ -36,6 +37,94 @@ _STOPWORDS = {
     "因为",
     "所以",
 }
+_QUESTION_PATTERNS = (
+    "如何看待",
+    "发生了什么",
+    "是什么意思",
+    "为什么",
+    "请问",
+    "怎么",
+    "哪些",
+    "是否",
+)
+_CANONICAL_TOPIC_RULES: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "股票与交易",
+        (
+            "a股",
+            "股市",
+            "etf",
+            "交易",
+            "仓位",
+            "回撤",
+            "估值",
+            "量化",
+            "牛市",
+        ),
+    ),
+    (
+        "宏观经济与政策",
+        (
+            "宏观",
+            "通胀",
+            "通缩",
+            "汇率",
+            "美联储",
+            "财政",
+            "货币",
+            "利率",
+            "债券",
+            "关税",
+            "gdp",
+            "cpi",
+            "ppi",
+        ),
+    ),
+    (
+        "房地产与资产配置",
+        (
+            "楼市",
+            "房价",
+            "地产",
+            "房地产",
+            "买房",
+            "租售",
+            "资产配置",
+            "公寓",
+            "住宅",
+        ),
+    ),
+    (
+        "行业与公司研究",
+        (
+            "泡泡玛特",
+            "商业模式",
+            "护城河",
+            "公司",
+            "行业",
+            "业绩",
+            "消费",
+            "科技",
+            "芯片",
+            "ai",
+        ),
+    ),
+    (
+        "方法论与认知",
+        (
+            "复盘",
+            "方法论",
+            "认知",
+            "框架",
+            "证据",
+            "推理",
+            "风险",
+            "纪律",
+            "策略",
+            "决策",
+        ),
+    ),
+]
 
 
 @dataclass(frozen=True)
@@ -115,15 +204,23 @@ def _resolve_primary_author(documents: list[Document]) -> str:
 
 
 def _extract_focus_topics(documents: list[Document], *, limit: int) -> list[str]:
+    canonical_scores = Counter()
+    for document in documents:
+        haystack = f"{document.title} {document.content}".lower()
+        for topic_name, keywords in _CANONICAL_TOPIC_RULES:
+            score = sum(1 for keyword in keywords if keyword in haystack)
+            if score > 0:
+                canonical_scores[topic_name] += score
+    if canonical_scores:
+        return [topic for topic, _ in canonical_scores.most_common(limit)]
+
     ranked = Counter()
     for document in documents:
         for token in _TITLE_SPLIT_PATTERN.split(document.title):
-            normalized = token.strip().lower()
-            if len(normalized) < 2:
+            cleaned = token.strip()
+            if not _is_topic_candidate(cleaned):
                 continue
-            if normalized in _STOPWORDS:
-                continue
-            ranked[normalized] += 1
+            ranked[cleaned.lower()] += 1
     return [topic for topic, _ in ranked.most_common(limit)]
 
 
@@ -132,9 +229,7 @@ def _extract_keywords(documents: list[Document], *, limit: int) -> list[KeywordS
     for document in documents:
         for token in _TOKEN_PATTERN.findall(document.content):
             normalized = token.strip().lower()
-            if len(normalized) < 2:
-                continue
-            if normalized in _STOPWORDS:
+            if not _is_keyword_candidate(normalized):
                 continue
             ranked[normalized] += 1
     return [
@@ -162,3 +257,35 @@ def _extract_reasoning_patterns(
         for label, count in ranked.most_common(limit)
         if count > 0
     ]
+
+
+def _is_topic_candidate(token: str) -> bool:
+    normalized = token.strip()
+    if len(normalized) < 2:
+        return False
+    if normalized in _TOPIC_KEEP:
+        return True
+    lower = normalized.lower()
+    if lower in _STOPWORDS:
+        return False
+    if any(pattern in normalized for pattern in _QUESTION_PATTERNS):
+        return False
+    if any(char.isdigit() for char in normalized):
+        return False
+    if normalized.endswith(("？", "?", "吗", "呢", "么")):
+        return False
+    if len(normalized) <= 2 and not re.fullmatch(r"[A-Z]{2,3}", normalized):
+        return False
+    return True
+
+
+def _is_keyword_candidate(normalized: str) -> bool:
+    if len(normalized) < 2:
+        return False
+    if normalized in _STOPWORDS:
+        return False
+    if any(pattern in normalized for pattern in _QUESTION_PATTERNS):
+        return False
+    if any(char.isdigit() for char in normalized):
+        return False
+    return True

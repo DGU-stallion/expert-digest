@@ -579,6 +579,41 @@ def test_cli_generate_handbook_can_save_run_metadata(monkeypatch, capsys):
     assert captured["payload"]["synthesis_mode"] == "deterministic"
 
 
+def test_cli_generate_handbook_fails_quality_gate(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "expert_digest.cli.evaluate_wiki",
+        lambda **_kwargs: type(
+            "Report",
+            (),
+            {"traceability_ratio": 1.0, "coverage_ratio": 1.0},
+        )(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.lint_wiki",
+        lambda **_kwargs: type("Lint", (), {"issue_count": 99})(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.build_handbook",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not build")),
+    )
+
+    exit_code = main(
+        [
+            "generate-handbook",
+            "--wiki-root-for-quality",
+            "data/wiki/huang_pass1b",
+            "--expected-source-count-for-quality",
+            "824",
+            "--max-lint-issues-for-quality",
+            "20",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Failed quality gate" in output
+
+
 def test_print_json_safely_falls_back_when_terminal_encoding_rejects_unicode(
     monkeypatch,
 ):

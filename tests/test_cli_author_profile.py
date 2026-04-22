@@ -115,3 +115,40 @@ def test_cli_generate_skill_draft_returns_error_when_profile_missing(
 
     assert exit_code == 1
     assert "Failed to generate skill draft" in output
+
+
+def test_cli_generate_skill_draft_fails_quality_gate(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "expert_digest.cli.evaluate_wiki",
+        lambda **_kwargs: type(
+            "Report",
+            (),
+            {"traceability_ratio": 1.0, "coverage_ratio": 1.0},
+        )(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.lint_wiki",
+        lambda **_kwargs: type("Lint", (), {"issue_count": 50})(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.build_author_profile",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("should not build profile")
+        ),
+    )
+
+    exit_code = main(
+        [
+            "generate-skill-draft",
+            "--wiki-root-for-quality",
+            "data/wiki/huang_pass1b",
+            "--expected-source-count-for-quality",
+            "824",
+            "--max-lint-issues-for-quality",
+            "20",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Failed quality gate" in output

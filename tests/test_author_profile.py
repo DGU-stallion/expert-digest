@@ -74,3 +74,27 @@ def test_build_author_profile_raises_when_no_documents(monkeypatch):
             db_path=Path("data/processed/zhihu_huang.sqlite3"),
             author=None,
         )
+
+
+def test_extract_author_profile_filters_question_and_numeric_focus_topics():
+    documents = [
+        Document.create(
+            author="黄彦臻",
+            title="如何看待 2025 年市场波动？",
+            content="如何看待并不应该作为主题词。",
+            source="sample",
+        ),
+        Document.create(
+            author="黄彦臻",
+            title="泡泡玛特海外扩张复盘",
+            content="泡泡玛特通过 IP 运营与渠道协同提升复购。",
+            source="sample",
+        ),
+    ]
+
+    profile = extract_author_profile_from_documents(documents)
+    joined_topics = " ".join(profile.focus_topics)
+
+    assert "如何看待" not in joined_topics
+    assert "2025" not in joined_topics
+    assert profile.focus_topics

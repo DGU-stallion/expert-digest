@@ -287,9 +287,7 @@ def build_handbook(
         raise ValueError(f"unsupported theme_source: {theme_source}")
 
     documents = (
-        get_documents_by_author(db_path, author)
-        if author
-        else list_documents(db_path)
+        get_documents_by_author(db_path, author) if author else list_documents(db_path)
     )
     if not documents:
         raise ValueError("no documents available for handbook generation")
@@ -558,9 +556,7 @@ def _render_handbook_markdown(
     docs_with_chunks = sum(
         1 for document in documents if document.id in document_ids_with_chunks
     )
-    avg_chunks_per_doc = (
-        len(chunks) / len(documents) if documents else 0.0
-    )
+    avg_chunks_per_doc = len(chunks) / len(documents) if documents else 0.0
     mode_text = {
         "hybrid": "本版手册由混合模式生成：优先 LLM，失败时回退确定性模板。",
         "deterministic": "本版手册由确定性模式生成：不依赖 LLM。",
@@ -586,7 +582,8 @@ def _render_handbook_markdown(
     lines.append("## 总览")
     lines.append(
         f"当前样本包含 {len(documents)} 篇原文，切分为 {len(chunks)} 个 chunk。"
-        f"其中 {docs_with_chunks} 篇进入了主题建模，平均每篇约 {avg_chunks_per_doc:.2f} 个 chunk。"
+        f"其中 {docs_with_chunks} 篇进入了主题建模，"
+        f"平均每篇约 {avg_chunks_per_doc:.2f} 个 chunk。"
         f"主题组织方式：{theme_source}（机器聚类后按人工规则命名与合并）。"
         f"{mode_text}"
     )
@@ -766,9 +763,7 @@ def _load_topic_taxonomy(
         if not name or not isinstance(keywords_raw, list):
             continue
         keywords = [
-            str(keyword).strip()
-            for keyword in keywords_raw
-            if str(keyword).strip()
+            str(keyword).strip() for keyword in keywords_raw if str(keyword).strip()
         ]
         if not keywords:
             continue
@@ -846,9 +841,7 @@ def _match_topic_taxonomy_name(
 
 def _merge_two_topics(left: TopicCluster, right: TopicCluster) -> TopicCluster:
     chunk_ids = list(
-        dict.fromkeys(
-            left.representative_chunk_ids + right.representative_chunk_ids
-        )
+        dict.fromkeys(left.representative_chunk_ids + right.representative_chunk_ids)
     )
     doc_map: dict[str, TopicRepresentativeDocument] = {}
     for item in left.representative_documents + right.representative_documents:
