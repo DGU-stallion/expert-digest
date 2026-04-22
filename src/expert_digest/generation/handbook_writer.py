@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
 from expert_digest.domain.models import Chunk, Document, Handbook
+from expert_digest.generation.book_pipeline import BookPipeline, build_chapter_markdowns
 from expert_digest.generation.prompts import build_theme_summary_prompts
 from expert_digest.knowledge.author_profile import (
     AuthorProfile,
@@ -265,6 +266,10 @@ class HybridThemeSynthesizer:
             "error_reason": None,
         }
 
+    @property
+    def llm_client(self) -> HandbookLLMClient | None:
+        return self._llm_client
+
 
 def build_handbook(
     *,
@@ -356,6 +361,36 @@ def build_handbook(
     author_label = author or _resolve_author_label(documents)
     profile = extract_author_profile_from_documents(documents)
     synthesis_mode = _infer_synthesis_mode(summarizer)
+    if synthesis_mode == "hybrid":
+        llm_client = _extract_synthesizer_llm_client(summarizer)
+        if llm_client is not None and theme_sections:
+            pipeline = BookPipeline(llm_client=llm_client)
+            chapter_markdowns = build_chapter_markdowns(
+                pipeline=pipeline,
+                sections=[
+                    {
+                        "name": section.definition.name,
+                        "summary": section.summary,
+                    }
+                    for section in theme_sections
+                ],
+            )
+            rewritten_sections: list[ThemeSection] = []
+            for index, section in enumerate(theme_sections):
+                chapter = chapter_markdowns[min(index, len(chapter_markdowns) - 1)]
+                chapter_name = _extract_chapter_name(chapter.title) or section.definition.name
+                rewritten_sections.append(
+                    replace(
+                        section,
+                        definition=ThemeDefinition(
+                            name=chapter_name,
+                            question=section.definition.question,
+                        ),
+                        summary=chapter.body,
+                    )
+                )
+            theme_sections = rewritten_sections
+
     markdown = _render_handbook_markdown(
         author_label=author_label,
         documents=documents,
@@ -727,6 +762,22 @@ def _chapter_label(index: int) -> str:
         10: "第十章",
     }
     return numerals.get(index, f"第{index}章")
+
+
+def _extract_synthesizer_llm_client(
+    synthesizer: ThemeSynthesizer,
+) -> HandbookLLMClient | None:
+    llm_client = getattr(synthesizer, "llm_client", None)
+    return llm_client if llm_client is not None else None
+
+
+def _extract_chapter_name(title: str) -> str:
+    text = title.strip()
+    if "：" in text and text.startswith("第"):
+        return text.split("：", maxsplit=1)[1].strip()
+    if ":" in text and text.lower().startswith("chapter"):
+        return text.split(":", maxsplit=1)[1].strip()
+    return text
 
 
 def _is_low_quality_summary(text: str) -> bool:
