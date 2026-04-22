@@ -80,9 +80,18 @@ def test_cli_build_author_profile_returns_error_on_empty_documents(
 
 
 def test_cli_generate_skill_draft_writes_output(monkeypatch, capsys):
+    class _FakeLLMClient:
+        provider = "google"
+        model = "gemini-2.5-flash"
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+
     monkeypatch.setattr(
         "expert_digest.cli.build_author_profile",
         lambda **_kwargs: _fake_profile_dict(),
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: _FakeLLMClient(),
     )
     monkeypatch.setattr(
         "expert_digest.cli.build_skill_markdown_from_profile",
@@ -105,6 +114,15 @@ def test_cli_generate_skill_draft_writes_output(monkeypatch, capsys):
 def test_cli_generate_skill_draft_returns_error_when_profile_missing(
     monkeypatch, capsys
 ):
+    class _FakeLLMClient:
+        provider = "google"
+        model = "gemini-2.5-flash"
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: _FakeLLMClient(),
+    )
     monkeypatch.setattr(
         "expert_digest.cli.build_author_profile",
         lambda **_kwargs: (_ for _ in ()).throw(ValueError("no documents available")),
@@ -152,3 +170,23 @@ def test_cli_generate_skill_draft_fails_quality_gate(monkeypatch, capsys):
 
     assert exit_code == 1
     assert "Failed quality gate" in output
+
+
+def test_cli_generate_skill_draft_fails_without_gemini_flash(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "expert_digest.cli.create_default_handbook_llm_client",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "expert_digest.cli.build_author_profile",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("should not build profile")
+        ),
+    )
+
+    exit_code = main(["generate-skill-draft"])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "llm_client_unavailable" in output
+    assert "google gemini-2.5-flash" in output.lower()

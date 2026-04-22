@@ -333,6 +333,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_seconds=args.llm_timeout,
                 max_output_tokens=args.llm_max_tokens,
             )
+            llm_error = _require_google_gemini_flash_client(llm_client)
+            if llm_error is not None:
+                print(f"Failed to generate handbook: {llm_error}")
+                return 1
             synthesizer = HybridThemeSynthesizer(llm_client=llm_client)
         else:
             synthesizer = DeterministicThemeSynthesizer()
@@ -448,6 +452,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             if error is not None:
                 print(f"Failed quality gate: {error}")
                 return 1
+        llm_client = create_default_handbook_llm_client()
+        llm_error = _require_google_gemini_flash_client(llm_client)
+        if llm_error is not None:
+            print(f"Failed to generate skill draft: {llm_error}")
+            return 1
         try:
             profile = build_author_profile(
                 db_path=args.db,
@@ -784,6 +793,33 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _require_google_gemini_flash_client(
+    llm_client: (
+        AnthropicCompatibleClient
+        | GeminiCompatibleClient
+        | OpenAICompatibleClient
+        | None
+    ),
+) -> str | None:
+    requirement = "llm_client_unavailable: require google gemini-2.5-flash api"
+    if llm_client is None:
+        return requirement
+
+    model = str(getattr(llm_client, "model", "")).removeprefix("models/").lower()
+    base_url = str(getattr(llm_client, "base_url", "")).lower()
+    if model != "gemini-2.5-flash":
+        return (
+            f"{requirement} "
+            f"(current_model={model or '<unknown>'})"
+        )
+    if "generativelanguage.googleapis.com" not in base_url:
+        return (
+            f"{requirement} "
+            f"(current_base_url={base_url or '<unknown>'})"
+        )
+    return None
 
 
 def _run_generation_quality_gate(
