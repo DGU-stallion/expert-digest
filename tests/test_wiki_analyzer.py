@@ -80,3 +80,46 @@ def test_analyze_document_evidence_filters_date_fragment_noise():
 
     assert "日午间" not in analysis.concepts
     assert "发生了什么" not in analysis.concepts
+
+
+def test_analyze_document_evidence_filters_market_broadcast_noise():
+    document = Document.create(
+        author="黄彦臻",
+        title="10 月 9 日午间全市场逾 500 只个股涨停，发生了什么？",
+        content=(
+            "午间盘中波动放大，全市场逾 500 只个股涨停。"
+            "请问后续会怎么走？"
+        ),
+        source="sample",
+    )
+    evidence = build_document_evidence(document, span_max_chars=30)
+
+    analysis = analyze_document_evidence(evidence)
+
+    joined_concepts = " ".join(analysis.concepts)
+    joined_topics = " ".join(analysis.topics)
+    assert "全市场逾" not in joined_concepts
+    assert "只个股涨停" not in joined_concepts
+    assert "日午间" not in joined_concepts
+    assert "全市场逾" not in joined_topics
+    assert "只个股涨停" not in joined_topics
+
+
+def test_analyze_document_evidence_applies_stricter_output_limits():
+    document = Document.create(
+        author="黄彦臻",
+        title="泡泡玛特海外扩张复盘",
+        content=(
+            "泡泡玛特的核心能力是 IP 运营。"
+            "潮玩行业的增长依赖品牌势能、渠道效率、组织协同和内容供给。"
+            "公司在海外市场通过门店、联名和社群运营提升复购。"
+        ),
+        source="sample",
+    )
+    evidence = build_document_evidence(document, span_max_chars=40)
+
+    analysis = analyze_document_evidence(evidence)
+
+    assert len(analysis.concepts) <= 8
+    assert len(analysis.topics) <= 3
+    assert "泡泡玛特" in analysis.concepts
