@@ -43,6 +43,16 @@ class WikiQualityReport:
 
 
 @dataclass(frozen=True)
+class WikiLintReport:
+    page_count: int
+    issue_count: int
+    low_info_title_pages: list[str]
+    pages_missing_sources: list[str]
+    isolated_pages: list[str]
+    near_duplicate_title_groups: list[list[str]]
+
+
+@dataclass(frozen=True)
 class SourceAnalysis:
     source_id: str
     source_title: str

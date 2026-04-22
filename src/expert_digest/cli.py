@@ -72,6 +72,7 @@ from expert_digest.storage.sqlite_store import (
 )
 from expert_digest.wiki.analyzer import analyze_document_evidence
 from expert_digest.wiki.evaluator import evaluate_wiki
+from expert_digest.wiki.linter import lint_wiki
 from expert_digest.wiki.retriever import search_wiki
 from expert_digest.wiki.vault import WikiVault
 from expert_digest.wiki.writer import write_analysis_to_vault
@@ -274,6 +275,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             vault=WikiVault(root=args.wiki_root),
             expected_source_count=args.expected_source_count,
         )
+        _print_json_safely(asdict(report))
+        return 0
+
+    if args.command == "lint-wiki":
+        report = lint_wiki(vault=WikiVault(root=args.wiki_root))
         _print_json_safely(asdict(report))
         return 0
 
@@ -539,6 +545,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("data/wiki/default"),
     )
     eval_wiki_parser.add_argument("--expected-source-count", type=int, default=0)
+
+    lint_wiki_parser = subparsers.add_parser("lint-wiki")
+    lint_wiki_parser.add_argument(
+        "--wiki-root",
+        type=Path,
+        default=Path("data/wiki/default"),
+    )
 
     list_parser = subparsers.add_parser("list-documents")
     list_parser.add_argument("--author")
