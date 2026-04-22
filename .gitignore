@@ -28,6 +28,7 @@ data/raw/
 data/processed/
 data/vector_store/
 data/outputs/
+data/wiki/
 !data/.gitkeep
 !data/sample/
 !data/sample/.gitkeep
