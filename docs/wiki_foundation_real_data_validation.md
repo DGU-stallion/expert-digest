@@ -139,3 +139,72 @@ analyzer 过滤与归一化 -> writer 聚合 -> index 分层 -> wiki lint
 ```
 
 完成后再重新跑 824 篇数据，并比较 concept/topic 数量、搜索耗时和抽检质量。
+
+## 2026-04-22 Wiki Quality Pass 1 复跑（对比基线）
+
+### 复跑说明
+
+- 为避免历史目录残留影响统计，本次使用全新目录：`data/wiki/huang_pass1`。
+- 数据源保持不变：`data/processed/zhihu_huang.sqlite3`（824 篇）。
+
+### 执行命令
+
+```powershell
+.\.venv\Scripts\expert-digest.exe build-evidence --db data/processed/zhihu_huang.sqlite3 --rebuild
+.\.venv\Scripts\expert-digest.exe build-wiki --db data/processed/zhihu_huang.sqlite3 --wiki-root data/wiki/huang_pass1 --expert-id huang --expert-name "黄彦臻" --purpose "沉淀黄彦臻公开文章中的投资分析框架。"
+.\.venv\Scripts\expert-digest.exe search-wiki "泡泡玛特 核心能力" --wiki-root data/wiki/huang_pass1
+.\.venv\Scripts\expert-digest.exe eval-wiki --wiki-root data/wiki/huang_pass1 --expected-source-count 824
+```
+
+### 结果指标（Pass 1）
+
+- Source documents: 824
+- Parent sections: 830
+- Child chunks: 4744
+- Evidence spans: 8055
+- Source pages: 824
+- Topic pages: 2961
+- Concept pages: 5757
+- Total evaluated wiki pages: 9542
+- Markdown files in vault: 9549
+- Vault Markdown size: 15,199,672 bytes
+- `index.md` size: 192 bytes
+- `sources/index.md` size: 124,152 bytes
+- `topics/index.md` size: 211,195 bytes
+- `concepts/index.md` size: 412,227 bytes
+- `log.md` size: 134,844 bytes
+
+Quality report:
+
+```json
+{
+  "page_count": 9542,
+  "source_page_count": 824,
+  "pages_with_sources": 9542,
+  "pages_missing_sources": [],
+  "traceability_ratio": 1.0,
+  "coverage_ratio": 1.0
+}
+```
+
+### 与 2026-04-21 基线对比
+
+| 指标 | 2026-04-21 基线 | 2026-04-22 Pass 1 | 变化 |
+| --- | ---:| ---:| ---:|
+| Source pages | 824 | 824 | 0 |
+| Topic pages | 2866 | 2961 | +95 |
+| Concept pages | 5640 | 5757 | +117 |
+| Evaluated wiki pages | 9330 | 9542 | +212 |
+| `traceability_ratio` | 1.0 | 1.0 | 0 |
+| `coverage_ratio` | 1.0 | 1.0 | 0 |
+| 根 `index.md` 大小 | 749,251 B | 192 B | -749,059 B |
+
+### 本轮结论
+
+1. 导航结构目标达成：根 `index.md` 从日志式大文件收敛为总览入口，分层索引生效。
+2. 可追溯性目标保持：`traceability_ratio=1.0`、`coverage_ratio=1.0`。
+3. 数量收敛目标未达成：concept/topic 数量较基线仍有小幅上升。
+
+### 后续建议
+
+下一轮应继续收紧 analyzer 规则（尤其是标题归一化与低信息短语过滤），并增加针对真实噪声样本的回归测试，直到 concept/topic 总量相对基线出现稳定下降。
