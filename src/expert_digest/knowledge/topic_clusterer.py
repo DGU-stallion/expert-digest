@@ -8,6 +8,8 @@ from statistics import mean
 from typing import Protocol
 
 from expert_digest.domain.models import Chunk, ChunkEmbedding, Document
+from expert_digest.knowledge.community_detection import detect_communities
+from expert_digest.knowledge.topic_graph import build_topic_graph
 from expert_digest.processing.embedder import DEFAULT_EMBEDDING_MODEL
 from expert_digest.retrieval.retriever import cosine_similarity
 from expert_digest.storage.sqlite_store import (
@@ -167,38 +169,42 @@ def cluster_chunks_by_embeddings(
     if not entries:
         return []
 
-    vectors = [entry[2] for entry in entries]
-    topic_count = min(num_topics, len(vectors))
-    centroids = _initialize_centroids(vectors=vectors, topic_count=topic_count)
-
-    assignments: list[int] | None = None
-    for _ in range(max_iter):
-        next_assignments = [
-            _best_centroid_index(vector, centroids) for vector in vectors
-        ]
-        if assignments == next_assignments:
-            break
-        assignments = next_assignments
-        centroids = _recompute_centroids(
-            vectors=vectors,
-            assignments=assignments,
-            previous_centroids=centroids,
-            topic_count=topic_count,
-        )
-
-    assert assignments is not None
+    entry_by_chunk_id: dict[str, tuple[Chunk, Document, list[float]]] = {
+        chunk.id: (chunk, document, vector)
+        for chunk, document, vector in entries
+    }
+    filtered_embeddings = [
+        embedding
+        for embedding in sorted_embeddings
+        if embedding.chunk_id in entry_by_chunk_id
+    ]
+    graph = build_topic_graph(
+        chunk_embeddings=filtered_embeddings,
+        similarity_threshold=0.35,
+        max_neighbors=8,
+    )
+    communities = detect_communities(graph=graph, max_iter=max_iter)
+    if not communities:
+        communities = [[chunk_id] for chunk_id in sorted(entry_by_chunk_id.keys())]
+    communities = communities[: min(num_topics, len(communities))]
 
     raw_clusters: list[dict[str, object]] = []
-    for cluster_index in range(topic_count):
+    for community in communities:
         cluster_entries = [
-            entries[index]
-            for index, assigned in enumerate(assignments)
-            if assigned == cluster_index
+            entry_by_chunk_id[chunk_id]
+            for chunk_id in community
+            if chunk_id in entry_by_chunk_id
         ]
         if not cluster_entries:
             continue
 
-        centroid = centroids[cluster_index]
+        vectors = [entry[2] for entry in cluster_entries]
+        centroid = _normalize_vector(
+            [
+                sum(vector[dim] for vector in vectors)
+                for dim in range(len(vectors[0]))
+            ]
+        )
         chunk_scores: list[tuple[str, float, str]] = []
         doc_scores: dict[str, tuple[float, str]] = {}
 
@@ -213,7 +219,6 @@ def cluster_chunks_by_embeddings(
             item[0]
             for item in sorted(chunk_scores, key=lambda item: item[1], reverse=True)[:5]
         ]
-
         representative_documents: list[TopicRepresentativeDocument] = []
         for document_id, (score, chunk_id) in sorted(
             doc_scores.items(),
