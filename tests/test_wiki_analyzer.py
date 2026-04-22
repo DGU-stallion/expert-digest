@@ -123,3 +123,18 @@ def test_analyze_document_evidence_applies_stricter_output_limits():
     assert len(analysis.concepts) <= 8
     assert len(analysis.topics) <= 3
     assert "泡泡玛特" in analysis.concepts
+
+
+def test_analyze_document_evidence_rejects_two_letter_lowercase_noise():
+    document = Document.create(
+        author="黄彦臻",
+        title="BD BP 交易复盘",
+        content="BD BP 是论坛里的噪声缩写，不应成为稳定概念。",
+        source="sample",
+    )
+    evidence = build_document_evidence(document, span_max_chars=30)
+
+    analysis = analyze_document_evidence(evidence)
+
+    assert "bd" not in [item.lower() for item in analysis.concepts]
+    assert "bp" not in [item.lower() for item in analysis.concepts]

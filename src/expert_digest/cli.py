@@ -311,6 +311,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-handbook":
+        if args.wiki_root_for_quality is not None:
+            error = _run_generation_quality_gate(
+                wiki_root=args.wiki_root_for_quality,
+                expected_source_count=args.expected_source_count_for_quality,
+                max_lint_issues=args.max_lint_issues_for_quality,
+            )
+            if error is not None:
+                print(f"Failed quality gate: {error}")
+                return 1
         llm_client: (
             AnthropicCompatibleClient
             | GeminiCompatibleClient
@@ -430,6 +439,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-skill-draft":
+        if args.wiki_root_for_quality is not None:
+            error = _run_generation_quality_gate(
+                wiki_root=args.wiki_root_for_quality,
+                expected_source_count=args.expected_source_count_for_quality,
+                max_lint_issues=args.max_lint_issues_for_quality,
+            )
+            if error is not None:
+                print(f"Failed quality gate: {error}")
+                return 1
         try:
             profile = build_author_profile(
                 db_path=args.db,
@@ -602,6 +620,17 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
     handbook_parser.add_argument("--format", choices=["text", "json"], default="text")
     handbook_parser.add_argument("--save-run-metadata", type=Path, default=None)
+    handbook_parser.add_argument("--wiki-root-for-quality", type=Path, default=None)
+    handbook_parser.add_argument(
+        "--expected-source-count-for-quality",
+        type=int,
+        default=0,
+    )
+    handbook_parser.add_argument(
+        "--max-lint-issues-for-quality",
+        type=int,
+        default=40,
+    )
 
     cluster_parser = subparsers.add_parser("cluster-topics")
     cluster_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -638,6 +667,17 @@ def _build_parser() -> argparse.ArgumentParser:
     skill_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     skill_parser.add_argument("--author")
     skill_parser.add_argument("--output", type=Path, default=None)
+    skill_parser.add_argument("--wiki-root-for-quality", type=Path, default=None)
+    skill_parser.add_argument(
+        "--expected-source-count-for-quality",
+        type=int,
+        default=0,
+    )
+    skill_parser.add_argument(
+        "--max-lint-issues-for-quality",
+        type=int,
+        default=40,
+    )
 
     mcp_parser = subparsers.add_parser("run-mcp-server")
     mcp_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -744,6 +784,41 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _run_generation_quality_gate(
+    *,
+    wiki_root: Path,
+    expected_source_count: int,
+    max_lint_issues: int,
+) -> str | None:
+    if expected_source_count < 0:
+        return "expected_source_count_for_quality must be >= 0"
+    if max_lint_issues < 0:
+        return "max_lint_issues_for_quality must be >= 0"
+    if not wiki_root.exists():
+        return f"wiki root not found: {wiki_root}"
+
+    vault = WikiVault(root=wiki_root)
+    eval_report = evaluate_wiki(
+        vault=vault,
+        expected_source_count=expected_source_count,
+    )
+    if eval_report.traceability_ratio < 1.0:
+        return f"traceability_ratio={eval_report.traceability_ratio} < 1.0"
+    if expected_source_count > 0 and eval_report.coverage_ratio < 1.0:
+        return (
+            f"coverage_ratio={eval_report.coverage_ratio} < 1.0 "
+            f"(expected_source_count={expected_source_count})"
+        )
+
+    lint_report = lint_wiki(vault=vault)
+    if lint_report.issue_count > max_lint_issues:
+        return (
+            f"issue_count={lint_report.issue_count} exceeds "
+            f"max_lint_issues={max_lint_issues}"
+        )
+    return None
 
 
 def _document_evidence_from_store(

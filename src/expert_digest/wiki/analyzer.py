@@ -180,8 +180,9 @@ def _is_candidate(token: str) -> bool:
     if len(normalized) <= 2:
         if normalized in _SHORT_KEEP:
             return True
-        if re.fullmatch(r"[A-Z]{2,3}", normalized):
-            return True
+        return False
+    if re.fullmatch(r"[A-Z]{3,4}", normalized):
+        return True
     if _is_short_chinese_token(normalized) and normalized not in _SHORT_KEEP:
         return True
     if len(normalized) < 2:
