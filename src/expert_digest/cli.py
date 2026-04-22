@@ -466,7 +466,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Failed to generate skill draft: {error}")
             return 1
         payload = profile if isinstance(profile, dict) else asdict(profile)
-        markdown = build_skill_markdown_from_profile(payload)
+        try:
+            markdown = build_skill_markdown_from_profile(
+                payload,
+                llm_client=llm_client,
+            )
+        except ValueError as error:
+            print(f"Failed to generate skill draft: {error}")
+            return 1
         output_path = args.output
         if output_path is None:
             output_path = Path("data/outputs") / render_skill_filename(

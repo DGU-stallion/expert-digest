@@ -95,7 +95,7 @@ def test_cli_generate_skill_draft_writes_output(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "expert_digest.cli.build_skill_markdown_from_profile",
-        lambda profile: "# SKILL: 黄彦臻风格助理\n",
+        lambda profile, llm_client: "# SKILL: 黄彦臻风格助理\n",
     )
 
     exit_code = main(

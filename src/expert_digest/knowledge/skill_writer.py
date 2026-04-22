@@ -1,8 +1,16 @@
-"""Generate baseline SKILL.md drafts from deterministic author profiles."""
+"""Generate LLM-only structured SKILL.md drafts from author profiles."""
 
 from __future__ import annotations
 
+import json
 import re
+from typing import Protocol
+
+
+class SkillWriterLLMClient(Protocol):
+    """Protocol for skill generation LLM client."""
+
+    def generate(self, *, system_prompt: str, user_prompt: str) -> str: ...
 
 
 def render_skill_filename(*, author: str) -> str:
@@ -11,38 +19,90 @@ def render_skill_filename(*, author: str) -> str:
     return f"{fallback.lower()}_skill.md"
 
 
-def build_skill_markdown_from_profile(profile: dict[str, object]) -> str:
+def build_skill_markdown_from_profile(
+    profile: dict[str, object],
+    *,
+    llm_client: SkillWriterLLMClient,
+) -> str:
+    author = str(profile.get("author", "未知作者"))
+    sections = _generate_structured_sections(profile=profile, llm_client=llm_client)
+    return f"""# SKILL: {author}风格助理
+
+## 风格原则
+{_to_bullets(sections["style_principles"])}
+
+## 回答流程
+{_to_bullets(sections["response_flow"])}
+
+## 风险守则
+{_to_bullets(sections["risk_guardrails"])}
+
+## 拒答策略
+{_to_bullets(sections["refusal_policy"])}
+"""
+
+
+def _generate_structured_sections(
+    *,
+    profile: dict[str, object],
+    llm_client: SkillWriterLLMClient,
+) -> dict[str, list[str]]:
     author = str(profile.get("author", "未知作者"))
     focus_topics = _join_list(profile.get("focus_topics", []))
     keywords = _join_keywords(profile.get("keywords", []))
     patterns = _join_patterns(profile.get("reasoning_patterns", []))
-    return f"""# SKILL: {author}风格助理
 
-## 目标
-- 在回答中优先复现 `{author}` 的表达方式与推理结构。
-- 仅在证据充分时给出结论，并明确不确定性。
+    system_prompt = (
+        "你是资深知识工程编辑。请根据作者画像生成 SKILL.md 的结构化草稿内容。"
+        "必须只输出 JSON 对象，不要输出任何多余文本。"
+    )
+    user_prompt = (
+        f"作者: {author}\n"
+        f"重点主题: {focus_topics}\n"
+        f"高频关键词: {keywords}\n"
+        f"推理模式: {patterns}\n\n"
+        "输出 JSON 对象，必须包含以下 4 个字段，且每个字段是长度 3-6 的字符串数组：\n"
+        '- "style_principles"\n'
+        '- "response_flow"\n'
+        '- "risk_guardrails"\n'
+        '- "refusal_policy"\n'
+        "所有条目必须是可执行、可检查的简短中文句子。"
+    )
+    raw = llm_client.generate(system_prompt=system_prompt, user_prompt=user_prompt)
+    return _parse_structured_sections(raw)
 
-## 规则
-- 重点关注主题：{focus_topics}
-- 高频关键词：{keywords}
-- 常见推理模板：{patterns}
-- 先给结论，再给证据，再给行动建议。
 
-## 引用约束
-- 所有事实性陈述必须基于 RAG 检索证据。
-- 若证据不足，必须显式说明“证据不足，暂不下结论”。
-- 不得编造来源、数字或原文引用。
+def _parse_structured_sections(raw: str) -> dict[str, list[str]]:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError("skill_generation_failed") from error
+    if not isinstance(parsed, dict):
+        raise ValueError("skill_generation_failed")
 
-## 拒答规则
-- 当问题与知识库证据无关时，拒绝直接给出确定性判断。
-- 当用户要求提供不存在的引用时，拒绝并说明可执行替代方案。
-- 对高风险建议（医疗、法律、投资）仅提供信息整理，不给个性化决策指令。
+    result: dict[str, list[str]] = {}
+    for field in (
+        "style_principles",
+        "response_flow",
+        "risk_guardrails",
+        "refusal_policy",
+    ):
+        value = parsed.get(field)
+        if not isinstance(value, list):
+            raise ValueError("skill_generation_failed")
+        lines = [str(item).strip() for item in value if str(item).strip()]
+        if not lines:
+            raise ValueError("skill_generation_failed")
+        result[field] = lines
+    return result
 
-## 风格提示
-- 保持简洁、结构化、可执行。
-- 术语出现时附一行白话解释。
-- 用“因为...所以...”和“如果...那么...”组织关键推理链。
-"""
+
+def _to_bullets(lines: list[str]) -> str:
+    return "\n".join(f"- {line}" for line in lines)
 
 
 def _join_list(items: object) -> str:
