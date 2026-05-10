@@ -81,43 +81,6 @@ def test_cli_cluster_topics_supports_json_output(monkeypatch, capsys):
     )
 
 
-def test_cli_generate_handbook_accepts_cluster_theme_options(monkeypatch, capsys):
-    captured: dict[str, object] = {}
-    handbook = Handbook(
-        author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册",
-        source_document_ids=["doc-1"],
-    )
-
-    def _fake_build_handbook(**kwargs):
-        captured.update(kwargs)
-        return handbook
-
-    monkeypatch.setattr("expert_digest.cli.build_handbook", _fake_build_handbook)
-    monkeypatch.setattr(
-        "expert_digest.cli.write_handbook",
-        lambda *, handbook, output_path: Path(output_path),
-    )
-
-    exit_code = main(
-        [
-            "generate-handbook",
-            "--synthesis-mode",
-            "deterministic",
-            "--theme-source",
-            "cluster",
-            "--num-topics",
-            "4",
-        ]
-    )
-    _ = capsys.readouterr().out
-
-    assert exit_code == 0
-    assert captured["theme_source"] == "cluster"
-    assert captured["num_topics"] == 4
-
-
 def test_cli_cluster_topics_llm_mode_wires_labeler_and_metadata(monkeypatch, capsys):
     captured: dict[str, object] = {}
 
@@ -134,7 +97,7 @@ def test_cli_cluster_topics_llm_mode_wires_labeler_and_metadata(monkeypatch, cap
         return _fake_topics()
 
     monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
+        "expert_digest.cli.require_fast_client",
         lambda **_kwargs: _FakeLLMClient(),
     )
     monkeypatch.setattr(

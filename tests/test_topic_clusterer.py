@@ -82,6 +82,58 @@ def test_cluster_chunks_by_embeddings_returns_two_topics_for_clear_groups():
     assert top_titles == {"主题A 复盘", "主题B 复盘"}
 
 
+def test_cluster_chunks_by_embeddings_uses_graph_communities_for_clear_separation():
+    doc_a = Document.create(author="作者A", title="主题A", content="A", source="sample")
+    doc_b = Document.create(author="作者B", title="主题B", content="B", source="sample")
+    doc_c = Document.create(author="作者C", title="主题C", content="C", source="sample")
+    chunk_a = Chunk.create(document_id=doc_a.id, text="A", chunk_index=0)
+    chunk_b = Chunk.create(document_id=doc_b.id, text="B", chunk_index=0)
+    chunk_c = Chunk.create(document_id=doc_c.id, text="C", chunk_index=0)
+
+    chunks_by_id = {
+        chunk_a.id: chunk_a,
+        chunk_b.id: chunk_b,
+        chunk_c.id: chunk_c,
+    }
+    documents_by_id = {
+        doc_a.id: doc_a,
+        doc_b.id: doc_b,
+        doc_c.id: doc_c,
+    }
+    embeddings = [
+        ChunkEmbedding.create(
+            chunk_id=chunk_a.id,
+            model="hash-bow-v1",
+            vector=[1.0, 0.0],
+        ),
+        ChunkEmbedding.create(
+            chunk_id=chunk_b.id,
+            model="hash-bow-v1",
+            vector=[0.95, 0.05],
+        ),
+        ChunkEmbedding.create(
+            chunk_id=chunk_c.id,
+            model="hash-bow-v1",
+            vector=[-1.0, 0.0],
+        ),
+    ]
+
+    topics = cluster_chunks_by_embeddings(
+        chunks_by_id=chunks_by_id,
+        documents_by_id=documents_by_id,
+        chunk_embeddings=embeddings,
+        num_topics=2,
+        top_docs_per_topic=2,
+    )
+
+    assert len(topics) == 2
+    title_sets = [
+        {item.title for item in topic.representative_documents}
+        for topic in topics
+    ]
+    assert any({"主题A", "主题B"} == items for items in title_sets)
+
+
 def test_cluster_chunks_by_embeddings_rejects_invalid_num_topics():
     chunks_by_id, documents_by_id, embeddings = _build_fixture()
 

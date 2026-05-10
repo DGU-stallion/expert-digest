@@ -8,24 +8,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from expert_digest.domain.models import Handbook
-from expert_digest.generation.handbook_writer import (
-    DeterministicThemeSynthesizer,
-    HybridThemeSynthesizer,
-    build_handbook,
-    write_handbook,
-)
 from expert_digest.generation.llm_client import (
     DEFAULT_LLM_PROVIDER_DB_PATH,
-    create_default_handbook_llm_client,
 )
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
 from expert_digest.knowledge.author_profile import build_author_profile
-from expert_digest.knowledge.skill_writer import (
-    build_skill_markdown_from_profile,
-    render_skill_filename,
-)
 from expert_digest.knowledge.topic_clusterer import (
     DeterministicTopicLabeler,
     LLMTopicLabeler,
@@ -42,6 +31,9 @@ from expert_digest.processing.embedder import (
 from expert_digest.processing.splitter import split_documents
 from expert_digest.rag.answering import StructuredAnswer
 from expert_digest.rag.query_service import answer_question
+from expert_digest.pipeline.graph import compile_pipeline
+from expert_digest.pipeline.llm import require_fast_client
+from expert_digest.pipeline.state import make_initial_state
 from expert_digest.storage.sqlite_store import (
     clear_chunk_embeddings,
     clear_chunks,
@@ -204,43 +196,24 @@ def generate_handbook(
     top_k: int,
     max_themes: int,
     output_path: str | Path,
-    synthesis_mode: str = "hybrid",
-    theme_source: str = "preset",
-    num_topics: int = 3,
-    topic_taxonomy_path: str | Path | None = None,
-    llm_config_db_path: str | Path = DEFAULT_LLM_PROVIDER_DB_PATH,
-    ccswitch_db_path: str | Path | None = None,
-    llm_timeout: int = 30,
-    llm_max_tokens: int = 700,
 ) -> HandbookResult:
-    if synthesis_mode not in {"hybrid", "deterministic"}:
-        raise ValueError(f"unsupported synthesis mode: {synthesis_mode}")
-
-    if ccswitch_db_path is not None:
-        llm_config_db_path = ccswitch_db_path
-
-    if synthesis_mode == "hybrid":
-        llm_client = create_default_handbook_llm_client(
-            ccswitch_db_path=llm_config_db_path,
-            timeout_seconds=llm_timeout,
-            max_output_tokens=llm_max_tokens,
-        )
-        synthesizer = HybridThemeSynthesizer(llm_client=llm_client)
-    else:
-        synthesizer = DeterministicThemeSynthesizer()
-
-    handbook = build_handbook(
-        db_path=db_path,
-        author=author,
-        model=model,
-        top_k=top_k,
-        max_themes=max_themes,
-        theme_source=theme_source,
-        num_topics=num_topics,
-        topic_taxonomy_path=topic_taxonomy_path,
-        synthesizer=synthesizer,
+    state = make_initial_state(
+        db_path=str(db_path),
+        author=author or "",
+        output_dir=str(Path(output_path).parent),
     )
-    resolved_output_path = write_handbook(handbook=handbook, output_path=output_path)
+    pipeline = compile_pipeline()
+    result = pipeline.invoke(state)
+    handbook_md = result.get("handbook_markdown", "")
+    resolved_output_path = Path(output_path)
+    resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_output_path.write_text(handbook_md, encoding="utf-8")
+    handbook = Handbook(
+        author=author or "unknown",
+        title=f"{author or 'Author'} 学习手册",
+        markdown=handbook_md,
+        source_document_ids=[],
+    )
     return HandbookResult(handbook=handbook, output_path=resolved_output_path)
 
 
@@ -266,11 +239,7 @@ def cluster_topics(
     llm_client = None
     labeler = DeterministicTopicLabeler()
     if label_mode == "llm":
-        llm_client = create_default_handbook_llm_client(
-            ccswitch_db_path=llm_config_db_path,
-            timeout_seconds=llm_timeout,
-            max_output_tokens=120,
-        )
+        llm_client = require_fast_client()
         labeler = LLMTopicLabeler(llm_client=llm_client)
 
     topics = build_topic_clusters(
@@ -346,19 +315,17 @@ def generate_skill_draft(
     author: str | None = None,
     output_path: str | Path | None = None,
 ) -> SkillDraftResult:
-    profile = build_author_profile(
-        db_path=db_path,
-        author=author,
-    )
-    payload = profile if isinstance(profile, dict) else asdict(profile)
-    markdown = build_skill_markdown_from_profile(payload)
+    state = make_initial_state(db_path=str(db_path), author=author or "")
+    pipeline = compile_pipeline()
+    result = pipeline.invoke(state)
+    markdown = result.get("skill_markdown", "")
     resolved_output = Path(output_path) if output_path is not None else Path(
-        "data/outputs"
-    ) / render_skill_filename(author=str(payload.get("author", "author")))
+        "data/outputs/skill.md"
+    )
     resolved_output.parent.mkdir(parents=True, exist_ok=True)
     resolved_output.write_text(markdown, encoding="utf-8")
     return SkillDraftResult(
-        profile=payload,
+        profile={"author": author or "unknown", "document_count": len(result.get("documents", []))},
         markdown=markdown,
         output_path=resolved_output,
     )

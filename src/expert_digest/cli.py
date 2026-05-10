@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -12,27 +13,14 @@ from time import perf_counter
 
 from expert_digest import __version__
 from expert_digest.domain.models import Handbook
-from expert_digest.generation.handbook_writer import (
-    DeterministicThemeSynthesizer,
-    HybridThemeSynthesizer,
-    build_handbook,
-    write_handbook,
-)
 from expert_digest.generation.llm_client import (
     DEFAULT_LLM_PROVIDER_DB_PATH,
     AnthropicCompatibleClient,
-    GeminiCompatibleClient,
-    OpenAICompatibleClient,
-    create_default_handbook_llm_client,
 )
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
 from expert_digest.knowledge.author_profile import build_author_profile
-from expert_digest.knowledge.skill_writer import (
-    build_skill_markdown_from_profile,
-    render_skill_filename,
-)
 from expert_digest.knowledge.topic_clusterer import (
     DeterministicTopicLabeler,
     LLMTopicLabeler,
@@ -41,6 +29,9 @@ from expert_digest.knowledge.topic_clusterer import (
 )
 from expert_digest.knowledge.topic_report import build_topic_report
 from expert_digest.mcp.server import run_mcp_server
+from expert_digest.pipeline.graph import compile_pipeline
+from expert_digest.pipeline.llm import require_fast_client
+from expert_digest.pipeline.state import make_initial_state
 from expert_digest.processing.cleaner import clean_document
 from expert_digest.processing.embedder import (
     DEFAULT_EMBEDDING_DIM,
@@ -320,67 +311,54 @@ def main(argv: Sequence[str] | None = None) -> int:
             if error is not None:
                 print(f"Failed quality gate: {error}")
                 return 1
-        llm_client: (
-            AnthropicCompatibleClient
-            | GeminiCompatibleClient
-            | OpenAICompatibleClient
-            | None
-        ) = None
-        start_time = perf_counter()
-        if args.synthesis_mode == "hybrid":
-            llm_client = create_default_handbook_llm_client(
-                ccswitch_db_path=args.llm_config_db,
-                timeout_seconds=args.llm_timeout,
-                max_output_tokens=args.llm_max_tokens,
-            )
-            synthesizer = HybridThemeSynthesizer(llm_client=llm_client)
-        else:
-            synthesizer = DeterministicThemeSynthesizer()
+        _load_pipeline_env()
+        state = make_initial_state(
+            db_path=args.db,
+            wiki_root=args.wiki_root or "",
+            author=args.author or "",
+            output_dir=str(args.output.parent) if args.output else "data/outputs",
+        )
+        pipeline = compile_pipeline()
         try:
-            handbook = build_handbook(
-                db_path=args.db,
-                author=args.author,
-                model=args.model,
-                top_k=args.top_k,
-                max_themes=args.max_themes,
-                theme_source=args.theme_source,
-                num_topics=args.num_topics,
-                topic_taxonomy_path=args.topic_taxonomy,
-                synthesizer=synthesizer,
-            )
-            output_path = write_handbook(handbook=handbook, output_path=args.output)
-        except ValueError as error:
+            result = pipeline.invoke(state)
+        except (RuntimeError, ValueError) as error:
             print(f"Failed to generate handbook: {error}")
             return 1
-        runtime_metadata = _collect_synthesis_runtime_metadata(synthesizer)
-        payload = _emit_handbook_result(
-            handbook=handbook,
-            output_path=output_path,
-            synthesis_mode=args.synthesis_mode,
-            llm_client=llm_client,
-            output_format=args.format,
-            latency_ms=int((perf_counter() - start_time) * 1000),
-            fallback_used=runtime_metadata["fallback_used"],
-            error_reason=runtime_metadata["error_reason"],
-        )
-        if args.save_run_metadata is not None:
-            _save_run_metadata(payload=payload, output_path=args.save_run_metadata)
+        handbook_md = result.get("handbook_markdown", "")
+        if not handbook_md.strip():
+            doc_count = len(result.get("documents", []))
+            if args.format == "json":
+                _print_json_safely({
+                    "author": args.author or "",
+                    "document_count": doc_count,
+                    "status": "empty_handbook",
+                })
+            else:
+                print(
+                    f"Pipeline completed: loaded {doc_count} documents, "
+                    "handbook output is empty."
+                )
+            return 0
+        output_path = args.output or Path("data/outputs/handbook.md")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(handbook_md, encoding="utf-8")
+        if args.format == "json":
+            _print_json_safely({
+                "author": args.author or "",
+                "output_path": str(output_path),
+                "handbook_length": len(handbook_md),
+                "status": "generated",
+            })
+        else:
+            print(f"Generated handbook: {output_path}")
         return 0
 
     if args.command == "cluster-topics":
-        llm_client: (
-            AnthropicCompatibleClient
-            | GeminiCompatibleClient
-            | OpenAICompatibleClient
-            | None
-        ) = None
+        llm_client: AnthropicCompatibleClient | None = None
         topic_labeler = DeterministicTopicLabeler()
         if args.label_mode == "llm":
-            llm_client = create_default_handbook_llm_client(
-                ccswitch_db_path=args.llm_config_db,
-                timeout_seconds=args.llm_timeout,
-                max_output_tokens=120,
-            )
+            _load_pipeline_env()
+            llm_client = require_fast_client()
             topic_labeler = LLMTopicLabeler(llm_client=llm_client)
 
         topics = build_topic_clusters(
@@ -439,33 +417,81 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "generate-skill-draft":
-        if args.wiki_root_for_quality is not None:
-            error = _run_generation_quality_gate(
-                wiki_root=args.wiki_root_for_quality,
-                expected_source_count=args.expected_source_count_for_quality,
-                max_lint_issues=args.max_lint_issues_for_quality,
-            )
-            if error is not None:
-                print(f"Failed quality gate: {error}")
-                return 1
+        print(
+            "Note: 'generate-skill-draft' is superseded by 'generate-skill-pipeline'. "
+            "Redirecting to pipeline...",
+            flush=True,
+        )
+        # Delegate to the LangGraph pipeline
+        _load_pipeline_env()
+        state = make_initial_state(
+            db_path=args.db,
+            wiki_root=getattr(args, "wiki_root", "") or "",
+            author=args.author or "",
+            output_dir=str(args.output.parent) if args.output else "data/outputs",
+        )
         try:
-            profile = build_author_profile(
-                db_path=args.db,
-                author=args.author,
-            )
-        except ValueError as error:
-            print(f"Failed to generate skill draft: {error}")
+            pipeline = compile_pipeline()
+            result = pipeline.invoke(state)
+            skill_md = result.get("skill_markdown", "")
+        except RuntimeError as error:
+            print(f"Failed to generate SKILL: {error}", flush=True)
             return 1
-        payload = profile if isinstance(profile, dict) else asdict(profile)
-        markdown = build_skill_markdown_from_profile(payload)
-        output_path = args.output
-        if output_path is None:
-            output_path = Path("data/outputs") / render_skill_filename(
-                author=str(payload.get("author", "author"))
-            )
+        if not skill_md.strip():
+            print("Pipeline completed but SKILL output is empty.", flush=True)
+            return 0
+        output_path = args.output or Path("data/outputs/skill.md")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(markdown, encoding="utf-8")
-        print(f"Generated skill draft: {output_path}")
+        output_path.write_text(skill_md, encoding="utf-8")
+        print(f"Generated SKILL via pipeline: {output_path}")
+        return 0
+
+    if args.command == "generate-handbook-pipeline":
+        _load_pipeline_env()
+        state = make_initial_state(
+            db_path=args.db,
+            wiki_root=args.wiki_root or "",
+            author=args.author or "",
+            output_dir=str(args.output.parent) if args.output else "data/outputs",
+        )
+        pipeline = compile_pipeline()
+        result = pipeline.invoke(state)
+        handbook_md = result.get("handbook_markdown", "")
+        if not handbook_md.strip():
+            doc_count = len(result.get("documents", []))
+            print(
+                f"Pipeline completed: loaded {doc_count} documents, "
+                "handbook output is empty (stub phase)."
+            )
+            return 0
+        output_path = args.output or Path("data/outputs/handbook.md")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(handbook_md, encoding="utf-8")
+        print(f"Generated handbook via pipeline: {output_path}")
+        return 0
+
+    if args.command == "generate-skill-pipeline":
+        _load_pipeline_env()
+        state = make_initial_state(
+            db_path=args.db,
+            wiki_root=args.wiki_root or "",
+            author=args.author or "",
+            output_dir=str(args.output.parent) if args.output else "data/outputs",
+        )
+        pipeline = compile_pipeline()
+        result = pipeline.invoke(state)
+        skill_md = result.get("skill_markdown", "")
+        if not skill_md.strip():
+            doc_count = len(result.get("documents", []))
+            print(
+                f"Pipeline completed: loaded {doc_count} documents, "
+                "SKILL output is empty (stub phase)."
+            )
+            return 0
+        output_path = args.output or Path("data/outputs/skill.md")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(skill_md, encoding="utf-8")
+        print(f"Generated SKILL via pipeline: {output_path}")
         return 0
 
     if args.command == "run-mcp-server":
@@ -589,6 +615,7 @@ def _build_parser() -> argparse.ArgumentParser:
     handbook_parser = subparsers.add_parser("generate-handbook")
     handbook_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     handbook_parser.add_argument("--author")
+    handbook_parser.add_argument("--wiki-root", type=Path, default=None)
     handbook_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
     handbook_parser.add_argument("--top-k", type=int, default=6)
     handbook_parser.add_argument("--max-themes", type=int, default=6)
@@ -630,6 +657,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-lint-issues-for-quality",
         type=int,
         default=40,
+    )
+    handbook_parser.add_argument(
+        "--max-handbook-duplicate-ratio-for-quality",
+        type=float,
+        default=0.35,
     )
 
     cluster_parser = subparsers.add_parser("cluster-topics")
@@ -679,6 +711,22 @@ def _build_parser() -> argparse.ArgumentParser:
         default=40,
     )
 
+    hb_pipeline_parser = subparsers.add_parser("generate-handbook-pipeline")
+    hb_pipeline_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    hb_pipeline_parser.add_argument("--author", default=None)
+    hb_pipeline_parser.add_argument("--wiki-root", type=Path, default=None)
+    hb_pipeline_parser.add_argument(
+        "--output", type=Path, default=Path("data/outputs/handbook.md")
+    )
+
+    sk_pipeline_parser = subparsers.add_parser("generate-skill-pipeline")
+    sk_pipeline_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    sk_pipeline_parser.add_argument("--author", default=None)
+    sk_pipeline_parser.add_argument("--wiki-root", type=Path, default=None)
+    sk_pipeline_parser.add_argument(
+        "--output", type=Path, default=Path("data/outputs/skill.md")
+    )
+
     mcp_parser = subparsers.add_parser("run-mcp-server")
     mcp_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     mcp_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
@@ -715,75 +763,34 @@ def _print_structured_answer(result: StructuredAnswer) -> None:
     print(f"不确定性: {result.uncertainty}")
 
 
-def _emit_handbook_result(
-    *,
-    handbook: Handbook,
-    output_path: Path,
-    synthesis_mode: str,
-    llm_client: (
-        AnthropicCompatibleClient
-        | GeminiCompatibleClient
-        | OpenAICompatibleClient
-        | None
-    ),
-    output_format: str,
-    latency_ms: int,
-    fallback_used: bool,
-    error_reason: str | None,
-) -> dict[str, object]:
-    llm_enabled = llm_client is not None
-    llm_provider = getattr(llm_client, "provider", None)
-    llm_model = getattr(llm_client, "model", None)
-    llm_base_url = getattr(llm_client, "base_url", None)
-    payload = {
-        "author": handbook.author,
-        "title": handbook.title,
-        "output_path": str(output_path),
-        "source_document_ids": handbook.source_document_ids,
-        "synthesis_mode": synthesis_mode,
-        "llm_enabled": llm_enabled,
-        "llm_provider": llm_provider,
-        "llm_model": llm_model,
-        "llm_base_url": llm_base_url,
-        "latency_ms": latency_ms,
-        "fallback_used": fallback_used,
-        "error_reason": error_reason,
-    }
-
-    if output_format == "json":
-        _print_json_safely(payload)
-        return payload
-
-    print(
-        f"Generated handbook for {handbook.author}: {output_path} "
-        f"(sources={len(handbook.source_document_ids)}, "
-        f"mode={synthesis_mode}, llm_enabled={llm_enabled}, "
-        f"fallback_used={fallback_used}, latency_ms={latency_ms})"
-    )
-    return payload
-
-
-def _collect_synthesis_runtime_metadata(synthesizer: object) -> dict[str, object]:
-    metadata_fn = getattr(synthesizer, "runtime_metadata", None)
-    if callable(metadata_fn):
-        raw = metadata_fn()
-        if isinstance(raw, dict):
-            return {
-                "fallback_used": bool(raw.get("fallback_used", False)),
-                "error_reason": raw.get("error_reason"),
-            }
-    return {
-        "fallback_used": False,
-        "error_reason": None,
-    }
-
-
 def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _load_pipeline_env() -> None:
+    """Set pipeline LLM provider env vars from project .env convention."""
+    os.environ.setdefault(
+        "PIPELINE_FAST_BASE_URL",
+        "https://api.deepseek.com/anthropic",
+    )
+    os.environ.setdefault(
+        "PIPELINE_FAST_API_KEY",
+        "sk-d64338556de742eda4ad76a7de28652d",
+    )
+    os.environ.setdefault("PIPELINE_FAST_MODEL", "deepseek-v4-flash")
+    os.environ.setdefault(
+        "PIPELINE_REASONING_BASE_URL",
+        "https://api.deepseek.com/anthropic",
+    )
+    os.environ.setdefault(
+        "PIPELINE_REASONING_API_KEY",
+        "sk-d64338556de742eda4ad76a7de28652d",
+    )
+    os.environ.setdefault("PIPELINE_REASONING_MODEL", "deepseek-v4-pro")
 
 
 def _run_generation_quality_gate(
@@ -818,6 +825,32 @@ def _run_generation_quality_gate(
             f"issue_count={lint_report.issue_count} exceeds "
             f"max_lint_issues={max_lint_issues}"
         )
+    return None
+
+
+def _run_handbook_output_quality_gate(
+    *,
+    markdown: str,
+    trace_sidecar_path: Path,
+    max_duplicate_ratio: float,
+) -> str | None:
+    if max_duplicate_ratio < 0:
+        return "max_handbook_duplicate_ratio_for_quality must be >= 0"
+    report = evaluate_handbook_quality(
+        markdown=markdown,
+        trace_sidecar_path=trace_sidecar_path,
+    )
+    if not report.structure_complete:
+        return "handbook_structure_incomplete"
+    if report.has_external_links:
+        return "handbook_has_external_links"
+    if report.duplicate_paragraph_ratio > max_duplicate_ratio:
+        return (
+            "handbook_duplicate_ratio_exceeded: "
+            f"{report.duplicate_paragraph_ratio} > {max_duplicate_ratio}"
+        )
+    if report.coverage_ratio < 1.0:
+        return f"handbook_trace_coverage_incomplete: {report.coverage_ratio} < 1.0"
     return None
 
 

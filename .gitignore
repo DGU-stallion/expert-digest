@@ -27,10 +27,16 @@ dist/
 data/raw/
 data/processed/
 data/vector_store/
-data/outputs/
+data/outputs/*
+!data/outputs/handbook.md
+!data/outputs/skill.md
+!data/outputs/handbook.trace.json
+data/wiki/
 !data/.gitkeep
 !data/sample/
 !data/sample/.gitkeep
 
 tmp_pytest_run/
 pytest_tmp_work/
+
+.claude/

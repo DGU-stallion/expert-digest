@@ -108,117 +108,57 @@ def test_import_documents_rejects_unsupported_kind():
         )
 
 
-def test_generate_handbook_uses_hybrid_with_default_llm_client(monkeypatch):
+def test_generate_handbook_uses_pipeline(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
-    fake_handbook = Handbook(
+
+    class _FakePipeline:
+        def invoke(self, state):
+            captured["state"] = state
+            return {"handbook_markdown": "# Handbook\n\nContent here."}
+
+    monkeypatch.setattr(
+        "expert_digest.app.services.compile_pipeline",
+        lambda: _FakePipeline(),
+    )
+
+    output_path = tmp_path / "handbook.md"
+    result = generate_handbook(
+        db_path=Path("data/processed/zhihu_huang.sqlite3"),
         author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册",
-        source_document_ids=["doc-1"],
+        model="hash-bow-v1",
+        top_k=3,
+        max_themes=3,
+        output_path=output_path,
     )
-    fake_llm_client = object()
 
-    def _fake_create_default_handbook_llm_client(**kwargs):
-        captured["llm_kwargs"] = kwargs
-        return fake_llm_client
+    assert result.handbook.author == "黄彦臻"
+    assert result.handbook.markdown == "# Handbook\n\nContent here."
+    assert result.output_path == output_path
+    assert output_path.exists()
+
+
+def test_generate_handbook_uses_pipeline_without_author(monkeypatch, tmp_path):
+    class _FakePipeline:
+        def invoke(self, state):
+            return {"handbook_markdown": "# Default Handbook\n"}
 
     monkeypatch.setattr(
-        "expert_digest.app.services.create_default_handbook_llm_client",
-        _fake_create_default_handbook_llm_client,
+        "expert_digest.app.services.compile_pipeline",
+        lambda: _FakePipeline(),
     )
 
-    def _fake_build_handbook(**kwargs):
-        captured["build_kwargs"] = kwargs
-        return fake_handbook
-
-    monkeypatch.setattr(
-        "expert_digest.app.services.build_handbook",
-        _fake_build_handbook,
-    )
-    monkeypatch.setattr(
-        "expert_digest.app.services.write_handbook",
-        lambda *, handbook, output_path: Path(output_path),
-    )
-
+    output_path = tmp_path / "default_handbook.md"
     result = generate_handbook(
         db_path=Path("data/processed/zhihu_huang.sqlite3"),
         author=None,
         model="hash-bow-v1",
         top_k=3,
         max_themes=3,
-        output_path=Path("data/outputs/handbook.md"),
-        synthesis_mode="hybrid",
-        ccswitch_db_path=Path("data/processed/mock_ccswitch.sqlite3"),
-        llm_timeout=12,
-        llm_max_tokens=600,
+        output_path=output_path,
     )
 
-    assert result.handbook == fake_handbook
-    assert result.output_path == Path("data/outputs/handbook.md")
-    assert captured["llm_kwargs"]["ccswitch_db_path"] == Path(
-        "data/processed/mock_ccswitch.sqlite3"
-    )
-    assert captured["llm_kwargs"]["timeout_seconds"] == 12
-    assert captured["llm_kwargs"]["max_output_tokens"] == 600
-    synthesizer = captured["build_kwargs"]["synthesizer"]
-    assert getattr(synthesizer, "_llm_client", None) is fake_llm_client
-
-
-def test_generate_handbook_rejects_unsupported_synthesis_mode():
-    with pytest.raises(ValueError, match="unsupported synthesis mode"):
-        generate_handbook(
-            db_path=Path("data/processed/zhihu_huang.sqlite3"),
-            author=None,
-            model="hash-bow-v1",
-            top_k=3,
-            max_themes=3,
-            output_path=Path("data/outputs/handbook.md"),
-            synthesis_mode="custom",
-        )
-
-
-def test_generate_handbook_passes_theme_source_and_num_topics(monkeypatch):
-    captured: dict[str, object] = {}
-    fake_handbook = Handbook(
-        author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册",
-        source_document_ids=["doc-1"],
-    )
-
-    monkeypatch.setattr(
-        "expert_digest.app.services.create_default_handbook_llm_client",
-        lambda **_kwargs: None,
-    )
-
-    def _fake_build_handbook(**kwargs):
-        captured.update(kwargs)
-        return fake_handbook
-
-    monkeypatch.setattr(
-        "expert_digest.app.services.build_handbook",
-        _fake_build_handbook,
-    )
-    monkeypatch.setattr(
-        "expert_digest.app.services.write_handbook",
-        lambda *, handbook, output_path: Path(output_path),
-    )
-
-    result = generate_handbook(
-        db_path=Path("data/processed/zhihu_huang.sqlite3"),
-        author="黄彦臻",
-        model="hash-bow-v1",
-        top_k=3,
-        max_themes=3,
-        output_path=Path("data/outputs/handbook.md"),
-        synthesis_mode="hybrid",
-        theme_source="cluster",
-        num_topics=5,
-    )
-
-    assert result.handbook == fake_handbook
-    assert captured["theme_source"] == "cluster"
-    assert captured["num_topics"] == 5
+    assert result.handbook.author == "unknown"
+    assert result.output_path == output_path
 
 
 def test_persist_uploaded_jsonl_writes_uploaded_content():
@@ -307,7 +247,7 @@ def test_cluster_topics_rejects_unsupported_label_mode():
         )
 
 
-def test_build_author_profile_snapshot_supports_export(monkeypatch):
+def test_build_author_profile_snapshot_supports_export(monkeypatch, tmp_path):
     fake_profile = {
         "author": "黄彦臻",
         "document_count": 2,
@@ -322,45 +262,35 @@ def test_build_author_profile_snapshot_supports_export(monkeypatch):
         lambda **_kwargs: fake_profile,
     )
 
+    output_path = tmp_path / "author_profile_test.json"
     result = build_author_profile_snapshot(
         db_path=Path("data/processed/zhihu_huang.sqlite3"),
         author="黄彦臻",
-        output_path=Path("data/outputs/author_profile_test.json"),
+        output_path=output_path,
     )
 
     assert result.profile["author"] == "黄彦臻"
-    assert result.output_path == Path("data/outputs/author_profile_test.json")
+    assert result.output_path == output_path
     assert result.output_path.exists()
 
 
-def test_generate_skill_draft_supports_default_output(monkeypatch):
-    fake_profile = {
-        "author": "黄彦臻",
-        "document_count": 2,
-        "source_document_ids": ["doc-1", "doc-2"],
-        "focus_topics": ["供给需求"],
-        "keywords": [{"keyword": "风险", "count": 3}],
-        "reasoning_patterns": [{"pattern": "因为...所以...", "count": 2}],
-    }
+def test_generate_skill_draft_supports_default_output(monkeypatch, tmp_path):
+    class _FakePipeline:
+        def invoke(self, state):
+            return {"skill_markdown": "# SKILL: test\n", "documents": [{"id": "1"}]}
 
     monkeypatch.setattr(
-        "expert_digest.app.services.build_author_profile",
-        lambda **_kwargs: fake_profile,
-    )
-    monkeypatch.setattr(
-        "expert_digest.app.services.build_skill_markdown_from_profile",
-        lambda profile: "# SKILL: 黄彦臻风格助理\n",
-    )
-    monkeypatch.setattr(
-        "expert_digest.app.services.render_skill_filename",
-        lambda **_kwargs: "huang_skill.md",
+        "expert_digest.app.services.compile_pipeline",
+        lambda: _FakePipeline(),
     )
 
+    output_path = tmp_path / "skill.md"
     result = generate_skill_draft(
         db_path=Path("data/processed/zhihu_huang.sqlite3"),
         author="黄彦臻",
+        output_path=output_path,
     )
 
     assert result.profile["author"] == "黄彦臻"
-    assert result.output_path == Path("data/outputs/huang_skill.md")
+    assert result.output_path == output_path
     assert result.output_path.exists()
