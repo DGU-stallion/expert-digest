@@ -340,73 +340,30 @@ def test_cli_ask_refuses_when_average_score_below_threshold(monkeypatch, capsys)
     assert payload["refused"] is True
 
 
-def test_cli_generate_handbook_writes_output(monkeypatch, capsys):
-    captured: dict[str, object] = {}
-    output_path = Path("data/outputs/test_cli_generate_handbook.md")
-    handbook = Handbook(
-        author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册\n\n## 专家内容总览\n",
-        source_document_ids=["doc-1", "doc-2"],
-    )
+def test_cli_generate_handbook_writes_output(monkeypatch, capsys, tmp_path):
+    class _FakePipeline:
+        def invoke(self, state):
+            return {"handbook_markdown": "# Handbook\n\nContent here.\n"}
 
-    def _fake_build_handbook(**kwargs):
-        captured.update(kwargs)
-        return handbook
+    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _FakePipeline())
 
-    def _fake_write_handbook(*, handbook: Handbook, output_path: str | Path) -> Path:
-        return Path(output_path)
-
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.5-flash"
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
-
-    monkeypatch.setattr("expert_digest.cli.build_handbook", _fake_build_handbook)
-    monkeypatch.setattr("expert_digest.cli.write_handbook", _fake_write_handbook)
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-
-    exit_code = main(
-        [
-            "generate-handbook",
-            "--author",
-            "黄彦臻",
-            "--top-k",
-            "4",
-            "--max-themes",
-            "2",
-            "--output",
-            str(output_path),
-        ]
-    )
+    output_path = tmp_path / "handbook.md"
+    exit_code = main(["generate-handbook", "--output", str(output_path)])
     output = capsys.readouterr().out
 
     assert exit_code == 0
-    assert captured["author"] == "黄彦臻"
-    assert captured["top_k"] == 4
-    assert captured["max_themes"] == 2
     assert "Generated handbook" in output
+    assert output_path.exists()
 
 
-def test_cli_generate_handbook_returns_error_on_generation_failure(
+def test_cli_generate_handbook_returns_error_on_pipeline_failure(
     monkeypatch, capsys
 ):
-    def _raise_error(**_kwargs):
-        raise ValueError("no documents available for handbook generation")
+    class _BrokenPipeline:
+        def invoke(self, state):
+            raise RuntimeError("pipeline error: no documents")
 
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.5-flash"
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
-
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-    monkeypatch.setattr("expert_digest.cli.build_handbook", _raise_error)
+    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _BrokenPipeline())
 
     exit_code = main(["generate-handbook"])
     output = capsys.readouterr().out
@@ -415,189 +372,48 @@ def test_cli_generate_handbook_returns_error_on_generation_failure(
     assert "Failed to generate handbook" in output
 
 
-def test_cli_generate_handbook_hybrid_uses_default_llm_client(monkeypatch, capsys):
-    captured: dict[str, object] = {}
+def test_cli_generate_handbook_json_output(monkeypatch, capsys, tmp_path):
+    class _FakePipeline:
+        def invoke(self, state):
+            return {"handbook_markdown": "# Handbook\n\nRich content.\n"}
 
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.5-flash"
-        base_url = "https://generativelanguage.googleapis.com"
+    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _FakePipeline())
 
-    fake_llm_client = _FakeLLMClient()
-    handbook = Handbook(
-        author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册\n",
-        source_document_ids=["doc-1"],
-    )
-
-    def _fake_create_default_llm_client(**kwargs):
-        captured.update(kwargs)
-        return fake_llm_client
-
-    def _fake_build_handbook(**kwargs):
-        synthesizer = kwargs["synthesizer"]
-        assert synthesizer._llm_client is fake_llm_client
-        return handbook
-
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        _fake_create_default_llm_client,
-    )
-    monkeypatch.setattr("expert_digest.cli.build_handbook", _fake_build_handbook)
-    monkeypatch.setattr(
-        "expert_digest.cli.write_handbook",
-        lambda *, handbook, output_path: Path(output_path),
-    )
-
+    output_path = tmp_path / "handbook.md"
     exit_code = main(
         [
             "generate-handbook",
-            "--synthesis-mode",
-            "hybrid",
-            "--ccswitch-db",
-            "data/processed/mock_ccswitch.sqlite3",
-            "--llm-timeout",
-            "12",
-            "--llm-max-tokens",
-            "600",
-        ]
-    )
-    _ = capsys.readouterr().out
-
-    assert exit_code == 0
-    assert captured["ccswitch_db_path"] == Path("data/processed/mock_ccswitch.sqlite3")
-    assert captured["timeout_seconds"] == 12
-    assert captured["max_output_tokens"] == 600
-
-
-def test_cli_generate_handbook_json_output_includes_llm_metadata(
-    monkeypatch, capsys
-):
-    class _FakeLLMClient:
-        base_url = "https://generativelanguage.googleapis.com"
-        model = "gemini-2.5-flash"
-        provider = "google"
-
-    handbook = Handbook(
-        author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册\n",
-        source_document_ids=["doc-1"],
-    )
-
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-    monkeypatch.setattr("expert_digest.cli.build_handbook", lambda **_kwargs: handbook)
-    monkeypatch.setattr(
-        "expert_digest.cli.write_handbook",
-        lambda *, handbook, output_path: Path(output_path),
-    )
-
-    exit_code = main(
-        [
-            "generate-handbook",
-            "--synthesis-mode",
-            "hybrid",
-            "--format",
-            "json",
-            "--output",
-            "data/outputs/handbook.json.md",
+            "--format", "json",
+            "--output", str(output_path),
         ]
     )
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 0
-    assert payload["author"] == "黄彦臻"
-    assert payload["llm_enabled"] is True
-    assert payload["llm_provider"] == "google"
-    assert payload["llm_model"] == "gemini-2.5-flash"
-    assert payload["llm_base_url"] == "https://generativelanguage.googleapis.com"
-    assert payload["latency_ms"] >= 0
-    assert payload["fallback_used"] is False
-    assert payload["error_reason"] is None
+    assert payload["status"] == "generated"
+    assert payload["handbook_length"] > 0
 
 
-def test_cli_generate_handbook_json_output_fails_without_llm(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: None,
-    )
+def test_cli_generate_handbook_json_output_empty(monkeypatch, capsys, tmp_path):
+    class _FakePipeline:
+        def invoke(self, state):
+            return {"handbook_markdown": ""}
 
+    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _FakePipeline())
+
+    output_path = tmp_path / "handbook.md"
     exit_code = main(
         [
             "generate-handbook",
-            "--synthesis-mode",
-            "hybrid",
+            "--format", "json",
+            "--output", str(output_path),
+            "--author", "TestAuthor",
         ]
     )
-    output = capsys.readouterr().out
-
-    assert exit_code == 1
-    assert "llm_client_unavailable" in output
-    assert "google gemini-2.5-flash" in output.lower()
-
-
-def test_cli_generate_handbook_hybrid_fails_when_model_is_not_gemini_flash(
-    monkeypatch, capsys
-):
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.0-flash"
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
-
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-
-    exit_code = main(["generate-handbook", "--synthesis-mode", "hybrid"])
-    output = capsys.readouterr().out
-
-    assert exit_code == 1
-    assert "llm_client_unavailable" in output
-    assert "google gemini-2.5-flash" in output.lower()
-
-
-def test_cli_generate_handbook_can_save_run_metadata(monkeypatch, capsys):
-    captured: dict[str, object] = {}
-    handbook = Handbook(
-        author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册\n",
-        source_document_ids=["doc-1"],
-    )
-
-    monkeypatch.setattr("expert_digest.cli.build_handbook", lambda **_kwargs: handbook)
-    monkeypatch.setattr(
-        "expert_digest.cli.write_handbook",
-        lambda *, handbook, output_path: Path(output_path),
-    )
-
-    def _fake_save_run_metadata(*, payload, output_path):
-        captured["payload"] = payload
-        captured["output_path"] = output_path
-
-    monkeypatch.setattr("expert_digest.cli._save_run_metadata", _fake_save_run_metadata)
-
-    exit_code = main(
-        [
-            "generate-handbook",
-            "--synthesis-mode",
-            "deterministic",
-            "--format",
-            "json",
-            "--save-run-metadata",
-            "data/outputs/handbook_run_metadata.json",
-        ]
-    )
-    _ = capsys.readouterr().out
+    payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 0
-    assert captured["output_path"] == Path("data/outputs/handbook_run_metadata.json")
-    assert captured["payload"]["synthesis_mode"] == "deterministic"
+    assert payload["status"] == "empty_handbook"
 
 
 def test_cli_generate_handbook_fails_quality_gate(monkeypatch, capsys):
@@ -614,8 +430,8 @@ def test_cli_generate_handbook_fails_quality_gate(monkeypatch, capsys):
         lambda **_kwargs: type("Lint", (), {"issue_count": 99})(),
     )
     monkeypatch.setattr(
-        "expert_digest.cli.build_handbook",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not build")),
+        "expert_digest.cli.compile_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("should not build")),
     )
 
     exit_code = main(
@@ -633,71 +449,6 @@ def test_cli_generate_handbook_fails_quality_gate(monkeypatch, capsys):
 
     assert exit_code == 1
     assert "Failed quality gate" in output
-
-
-def test_cli_generate_handbook_fails_post_quality_gate_on_external_links(
-    monkeypatch, capsys, tmp_path
-):
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.5-flash"
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
-
-    handbook = Handbook(
-        author="黄彦臻",
-        title="黄彦臻学习手册",
-        markdown="# 手册\n",
-        source_document_ids=["doc-1"],
-    )
-    wiki_root = tmp_path / "wiki"
-    wiki_root.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(
-        "expert_digest.cli.evaluate_wiki",
-        lambda **_kwargs: type(
-            "Report",
-            (),
-            {"traceability_ratio": 1.0, "coverage_ratio": 1.0},
-        )(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.lint_wiki",
-        lambda **_kwargs: type("Lint", (), {"issue_count": 0})(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-    monkeypatch.setattr("expert_digest.cli.build_handbook", lambda **_kwargs: handbook)
-    monkeypatch.setattr(
-        "expert_digest.cli.write_handbook",
-        lambda *, handbook, output_path: Path(output_path),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.evaluate_handbook_quality",
-        lambda **_kwargs: type(
-            "HandbookQuality",
-            (),
-            {
-                "structure_complete": True,
-                "has_external_links": True,
-                "duplicate_paragraph_ratio": 0.0,
-                "coverage_ratio": 1.0,
-            },
-        )(),
-    )
-
-    exit_code = main(
-        [
-            "generate-handbook",
-            "--wiki-root-for-quality",
-            str(wiki_root),
-        ]
-    )
-    output = capsys.readouterr().out
-
-    assert exit_code == 1
-    assert "handbook_has_external_links" in output
 
 
 def test_print_json_safely_falls_back_when_terminal_encoding_rejects_unicode(

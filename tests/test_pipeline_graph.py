@@ -40,11 +40,12 @@ class TestMainGraph:
         result = pipeline.invoke(state)
         expected_keys = {
             "db_path", "wiki_root", "author", "documents",
-            "themes", "concepts",
+            "themes", "concepts", "topic_clusters",
             "thinking_patterns", "expression_dna", "intellectual_genealogy",
             "key_decisions", "chapter_plan", "chapters", "review_results",
             "handbook_markdown", "mental_models", "decision_heuristics",
-            "values_antipatterns", "honest_boundaries", "skill_markdown",
+            "values_antipatterns", "honest_boundaries", "role_rules",
+            "protocol_steps", "skill_markdown", "_skill_verified",
             "max_rounds", "current_round", "errors", "output_dir",
         }
         assert set(result.keys()) == expected_keys

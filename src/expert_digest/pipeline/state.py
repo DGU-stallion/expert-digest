@@ -103,6 +103,7 @@ class DigestState(TypedDict):
     themes: list[Theme]
     concepts: list[str]
     thinking_patterns: list[str]
+    topic_clusters: list  # list[TopicCluster] from knowledge.topic_clusterer
     expression_dna: ExpressionDNA | None
     intellectual_genealogy: str
     key_decisions: list[dict]
@@ -118,7 +119,12 @@ class DigestState(TypedDict):
     decision_heuristics: list[str]
     values_antipatterns: dict
     honest_boundaries: list[str]
+    role_rules: str
+    protocol_steps: str
     skill_markdown: str
+
+    # Verification flags
+    _skill_verified: bool
 
     # Control
     max_rounds: int
@@ -144,6 +150,7 @@ def make_initial_state(
         themes=[],
         concepts=[],
         thinking_patterns=[],
+        topic_clusters=[],
         expression_dna=None,
         intellectual_genealogy="",
         key_decisions=[],
@@ -155,7 +162,10 @@ def make_initial_state(
         decision_heuristics=[],
         values_antipatterns={},
         honest_boundaries=[],
+        role_rules="",
+        protocol_steps="",
         skill_markdown="",
+        _skill_verified=False,
         max_rounds=max_rounds,
         current_round=0,
         errors=[],

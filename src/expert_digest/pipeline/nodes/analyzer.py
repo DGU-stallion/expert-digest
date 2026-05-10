@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from expert_digest.pipeline.llm import require_fast_client
+from expert_digest.pipeline.llm import require_reasoning_client
 from expert_digest.pipeline.state import DigestState, Theme
 
 _ANALYZER_SYSTEM_PROMPT = """\
@@ -57,7 +57,7 @@ def run_analyze_content(state: DigestState) -> dict:
             "thinking_patterns": [],
         }
 
-    llm = require_fast_client()
+    llm = require_reasoning_client()
     user_prompt = _build_user_prompt(documents)
     raw = llm.generate(
         system_prompt=_ANALYZER_SYSTEM_PROMPT,
@@ -135,4 +135,16 @@ def _parse_analysis_json(raw: str) -> dict:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    if not isinstance(parsed, dict):
+        return {}
+    # Normalize keys: LLMs sometimes change key names (e.g. "core_themes" vs "themes")
+    key_map = {
+        "core_themes": "themes",
+        "key_concepts": "concepts",
+        "thinking_patterns": "thinking_patterns",
+        "thinking_pattern": "thinking_patterns",
+    }
+    for old_key, new_key in key_map.items():
+        if old_key != new_key and old_key in parsed and new_key not in parsed:
+            parsed[new_key] = parsed.pop(old_key)
+    return parsed

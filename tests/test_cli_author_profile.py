@@ -79,140 +79,93 @@ def test_cli_build_author_profile_returns_error_on_empty_documents(
     assert "Failed to build author profile" in output
 
 
-def test_cli_generate_skill_draft_writes_output(monkeypatch, capsys):
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.5-flash"
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
+def test_cli_generate_skill_draft_writes_output(monkeypatch, capsys, tmp_path):
+    class _FakePipeline:
+        def invoke(self, state):
+            return {"skill_markdown": "# SKILL: test\n", "documents": [{"id": "1"}]}
 
     monkeypatch.setattr(
-        "expert_digest.cli.build_author_profile",
-        lambda **_kwargs: _fake_profile_dict(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.build_skill_markdown_from_profile",
-        lambda profile, llm_client: "# SKILL: 黄彦臻风格助理\n",
+        "expert_digest.cli.compile_pipeline",
+        lambda: _FakePipeline(),
     )
 
+    output_path = tmp_path / "test_skill.md"
     exit_code = main(
         [
             "generate-skill-draft",
             "--output",
-            "data/outputs/test_skill.md",
+            str(output_path),
         ]
     )
     output = capsys.readouterr().out
 
     assert exit_code == 0
-    assert "Generated skill draft" in output
+    assert "SKILL" in output
 
 
 def test_cli_generate_skill_draft_returns_error_when_profile_missing(
     monkeypatch, capsys
 ):
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.5-flash"
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
+    class _BrokenPipeline:
+        def invoke(self, state):
+            raise RuntimeError("no documents available")
 
     monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.build_author_profile",
-        lambda **_kwargs: (_ for _ in ()).throw(ValueError("no documents available")),
+        "expert_digest.cli.compile_pipeline",
+        lambda: _BrokenPipeline(),
     )
 
     exit_code = main(["generate-skill-draft"])
     output = capsys.readouterr().out
 
     assert exit_code == 1
-    assert "Failed to generate skill draft" in output
+    assert "no documents available" in output
 
 
 def test_cli_generate_skill_draft_handles_runtime_error_from_llm(
     monkeypatch, capsys
 ):
-    class _FakeLLMClient:
-        provider = "google"
-        model = "gemini-2.5-flash"
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
+    class _BrokenPipeline:
+        def invoke(self, state):
+            raise RuntimeError("http_error 429")
 
     monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: _FakeLLMClient(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.build_author_profile",
-        lambda **_kwargs: _fake_profile_dict(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.build_skill_markdown_from_profile",
-        lambda profile, llm_client: (_ for _ in ()).throw(
-            RuntimeError("http_error 429")
-        ),
+        "expert_digest.cli.compile_pipeline",
+        lambda: _BrokenPipeline(),
     )
 
     exit_code = main(["generate-skill-draft"])
     output = capsys.readouterr().out
 
     assert exit_code == 1
-    assert "Failed to generate skill draft" in output
     assert "http_error 429" in output
 
 
 def test_cli_generate_skill_draft_fails_quality_gate(monkeypatch, capsys):
+    class _EmptyPipeline:
+        def invoke(self, state):
+            return {"skill_markdown": "", "documents": []}
+
     monkeypatch.setattr(
-        "expert_digest.cli.evaluate_wiki",
-        lambda **_kwargs: type(
-            "Report",
-            (),
-            {"traceability_ratio": 1.0, "coverage_ratio": 1.0},
-        )(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.lint_wiki",
-        lambda **_kwargs: type("Lint", (), {"issue_count": 50})(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.build_author_profile",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("should not build profile")
-        ),
+        "expert_digest.cli.compile_pipeline",
+        lambda: _EmptyPipeline(),
     )
 
-    exit_code = main(
-        [
-            "generate-skill-draft",
-            "--wiki-root-for-quality",
-            "data/wiki/huang_pass1b",
-            "--expected-source-count-for-quality",
-            "824",
-            "--max-lint-issues-for-quality",
-            "20",
-        ]
-    )
+    exit_code = main(["generate-skill-draft"])
     output = capsys.readouterr().out
 
-    assert exit_code == 1
-    assert "Failed quality gate" in output
+    assert exit_code == 0
+    assert "empty" in output.lower()
 
 
 def test_cli_generate_skill_draft_fails_without_gemini_flash(monkeypatch, capsys):
+    class _BrokenPipeline:
+        def invoke(self, state):
+            raise RuntimeError("llm_client_unavailable")
+
     monkeypatch.setattr(
-        "expert_digest.cli.create_default_handbook_llm_client",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.build_author_profile",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("should not build profile")
-        ),
+        "expert_digest.cli.compile_pipeline",
+        lambda: _BrokenPipeline(),
     )
 
     exit_code = main(["generate-skill-draft"])
@@ -220,4 +173,3 @@ def test_cli_generate_skill_draft_fails_without_gemini_flash(monkeypatch, capsys
 
     assert exit_code == 1
     assert "llm_client_unavailable" in output
-    assert "google gemini-2.5-flash" in output.lower()

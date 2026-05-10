@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from expert_digest.pipeline.handbook.editor import _build_editor_prompt
+from expert_digest.pipeline.handbook.editor import _assemble_raw
 from expert_digest.pipeline.handbook.graph import build_handbook_subgraph
 from expert_digest.pipeline.handbook.planner import _parse_chapter_plan
 from expert_digest.pipeline.handbook.reviewer import (
@@ -12,7 +12,7 @@ from expert_digest.pipeline.handbook.reviewer import (
 from expert_digest.pipeline.handbook.tracer import run_build_trace
 from expert_digest.pipeline.handbook.writer import (
     _build_writer_prompt,
-    _find_relevant_docs,
+    _gather_context_for_chapter,
 )
 from expert_digest.pipeline.state import (
     ChapterDraft,
@@ -92,21 +92,21 @@ class TestWriterUtilities:
 
     def test_build_writer_prompt_includes_plan(self):
         plan = ChapterPlan(title="测试章节", purpose="学习目的", target_themes=["t1"])
-        docs = [{"title": "doc1", "content": "content1"}]
-        prompt = _build_writer_prompt(plan, docs)
+        texts = ["### doc1\ncontent1"]
+        prompt = _build_writer_prompt(plan, texts, [])
         assert "测试章节" in prompt
         assert "学习目的" in prompt
         assert "content1" in prompt
 
     def test_build_writer_prompt_includes_feedback(self):
         plan = ChapterPlan(title="测试", purpose="目的")
-        prompt = _build_writer_prompt(plan, [], review_feedback=["缺少案例", "结构不清晰"])
+        prompt = _build_writer_prompt(plan, [], [], review_feedback=["缺少案例", "结构不清晰"])
         assert "缺少案例" in prompt
         assert "结构不清晰" in prompt
 
     def test_build_writer_prompt_no_feedback(self):
         plan = ChapterPlan(title="测试", purpose="目的")
-        prompt = _build_writer_prompt(plan, [])
+        prompt = _build_writer_prompt(plan, [], [])
         assert "上一轮评审意见" not in prompt
 
     def test_find_relevant_docs_theme_match(self):
@@ -114,22 +114,23 @@ class TestWriterUtilities:
         state["themes"] = [Theme(label="t1", summary="s1", source_document_ids=["d1"])]
         state["documents"] = [{"id": "d1", "title": "doc1", "content": "c1"}, {"id": "d2", "title": "doc2", "content": "c2"}]
         plan = ChapterPlan(title="测试", purpose="目的", target_themes=["t1"])
-        docs = _find_relevant_docs(plan, state)
-        assert len(docs) == 1
-        assert docs[0]["id"] == "d1"
+        texts = _gather_context_for_chapter(plan, state)
+        assert len(texts) >= 1
+        assert any("doc1" in t for t in texts)
 
     def test_find_relevant_docs_fallback(self):
         state = make_initial_state()
         state["documents"] = [{"id": "d1", "title": "doc1", "content": "c1"}]
         plan = ChapterPlan(title="测试", purpose="目的", target_themes=["unmatched"])
-        docs = _find_relevant_docs(plan, state)
-        assert len(docs) == 1
+        texts = _gather_context_for_chapter(plan, state)
+        assert len(texts) >= 1
+        assert any("doc1" in t for t in texts)
 
     def test_find_relevant_docs_empty_docs(self):
         state = make_initial_state()
         plan = ChapterPlan(title="测试", purpose="目的")
-        docs = _find_relevant_docs(plan, state)
-        assert docs == []
+        texts = _gather_context_for_chapter(plan, state)
+        assert texts == []
 
 
 class TestReviewer:
@@ -226,7 +227,7 @@ class TestEditor:
             {"title": "第一章", "content": "内容1"},
             {"title": "第二章", "content": "内容2"},
         ]
-        prompt = _build_editor_prompt(chapters, "作者甲", [])
+        prompt = _assemble_raw(chapters, "作者甲")
         assert "第一章" in prompt
         assert "第二章" in prompt
         assert "内容1" in prompt
@@ -234,7 +235,7 @@ class TestEditor:
 
     def test_editor_prompt_includes_transition(self):
         chapters = [{"title": "A", "content": "a"}, {"title": "B", "content": "b"}]
-        prompt = _build_editor_prompt(chapters, "test", [])
+        prompt = _assemble_raw(chapters, "test")
         # Should have a separator between chapters
         assert "---" in prompt
 

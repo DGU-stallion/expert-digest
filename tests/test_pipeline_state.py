@@ -24,6 +24,7 @@ def test_make_initial_state_has_all_keys() -> None:
     assert state["documents"] == []
     assert state["themes"] == []
     assert state["concepts"] == []
+    assert state["topic_clusters"] == []
     assert state["thinking_patterns"] == []
     assert state["expression_dna"] is None
     assert state["intellectual_genealogy"] == ""
@@ -36,7 +37,10 @@ def test_make_initial_state_has_all_keys() -> None:
     assert state["decision_heuristics"] == []
     assert state["values_antipatterns"] == {}
     assert state["honest_boundaries"] == []
+    assert state["role_rules"] == ""
+    assert state["protocol_steps"] == ""
     assert state["skill_markdown"] == ""
+    assert state["_skill_verified"] is False
     assert state["max_rounds"] == 3
     assert state["current_round"] == 0
     assert state["errors"] == []
@@ -120,7 +124,10 @@ def test_state_dict_compliance() -> None:
         "decision_heuristics": [],
         "values_antipatterns": {"key": "value"},
         "honest_boundaries": ["boundary"],
+        "role_rules": "",
+        "protocol_steps": "",
         "skill_markdown": "# SKILL",
+        "_skill_verified": False,
         "max_rounds": 3,
         "current_round": 0,
         "errors": [PipelineError(node="n", message="m")],

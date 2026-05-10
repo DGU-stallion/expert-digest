@@ -5,52 +5,62 @@ from __future__ import annotations
 import json
 import re
 
-from expert_digest.pipeline.llm import require_fast_client
+from expert_digest.pipeline.llm import require_reasoning_client
 from expert_digest.pipeline.state import ChapterPlan, DigestState
 
 _PLANNER_SYSTEM_PROMPT = """\
-你是一位教育内容设计师。你的任务是根据作者的文章分析结果，规划一本系统性的学习手册的章节结构。
+你是一位教育内容设计师。你的任务是根据作者的文章聚类分析结果，规划一本系统性的学习手册的章节结构。
 
 要求：
-1. 规划 5-8 个章节，形成从入门到深入的学习路径
-2. 每个章节聚焦一个核心主题领域
-3. 章节之间要有逻辑递进关系
-4. 确保覆盖所有核心主题
+1. 规划 5-10 个章节，形成从基础认知到深度应用的学习路径
+2. 每个章节聚焦一个聚类主题领域，展开深度叙述
+3. 章节之间要有逻辑递进关系，前章为后章打基础
+4. 大聚类（chunk 数量多的）应分配更多章节空间
+5. 忽略零散的小主题，聚焦核心聚类
 
 必须只输出 JSON 数组，不要输出任何多余文本。JSON 格式：
 [
   {
     "title": "章节标题",
-    "purpose": "本章学习目的",
-    "target_themes": ["关联的主题标签1"],
+    "purpose": "本章学习目的（2-3句话，说明本章在整个学习路径中的定位）",
+    "target_themes": ["关联的聚类标签1"],
     "estimated_sections": 4
   }
 ]"""
 
 
 def _build_planner_prompt(state: DigestState) -> str:
-    """Build the user prompt for chapter planning from analysis results."""
+    """Build the user prompt for chapter planning from cluster results and analysis."""
+    clusters = state.get("topic_clusters", [])
     themes = state.get("themes", [])
     concepts = state.get("concepts", [])
-    patterns = state.get("thinking_patterns", [])
 
     parts: list[str] = []
-    parts.append(f"作者共有 {len(themes)} 个核心主题、{len(concepts)} 个关键概念、{len(patterns)} 个思维模式。\n")
+
+    if clusters:
+        parts.append(f"## 文章聚类结果（共 {len(clusters)} 个主要聚类）\n")
+        parts.append("以下是通过社区检测算法从所有文章片段中发现的聚类主题，按规模降序排列：\n")
+        sorted_clusters = sorted(
+            clusters, key=lambda c: c.get("chunk_count", 0), reverse=True
+        )
+        for i, c in enumerate(sorted_clusters, 1):
+            label = c.get("label", f"聚类{i}")
+            size = c.get("chunk_count", 0)
+            rep_docs = c.get("representative_documents", [])
+            doc_titles = [d.get("title", "") for d in rep_docs[:3] if d.get("title")]
+            parts.append(
+                f"{i}. **{label}** (规模: {size} 个片段)"
+                + (f" — 代表性文章: {', '.join(doc_titles)}" if doc_titles else "")
+            )
 
     if themes:
-        parts.append("## 核心主题")
-        for t in themes[:6]:
+        parts.append("\n## LLM 提取的主题（补充参考）")
+        for t in themes[:5]:
             parts.append(f"- {t.label}：{t.summary}")
 
     if concepts:
-        parts.append("## 关键概念")
-        for c in concepts[:15]:
-            parts.append(f"- {c}")
-
-    if patterns:
-        parts.append("## 思维模式")
-        for p in patterns[:8]:
-            parts.append(f"- {p}")
+        parts.append("\n## 关键概念")
+        parts.append("、".join(concepts[:12]))
 
     return "\n".join(parts)
 
@@ -61,7 +71,7 @@ def run_plan_chapters(state: DigestState) -> dict:
     if not themes:
         return {"chapter_plan": []}
 
-    llm = require_fast_client()
+    llm = require_reasoning_client()
     user_prompt = _build_planner_prompt(state)
     raw = llm.generate(
         system_prompt=_PLANNER_SYSTEM_PROMPT,

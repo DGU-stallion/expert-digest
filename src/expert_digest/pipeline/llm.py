@@ -1,8 +1,8 @@
 """LLM client helpers for pipeline nodes.
 
 Two provider tiers:
-- fast: 讯飞星辰 (astron-code-latest / Spark-X2-Flash) for normal tasks
-- reasoning: DeepSeek v4-pro for complex reasoning tasks
+- fast: DeepSeek v4-flash for straightforward tasks (analysis, formatting)
+- reasoning: DeepSeek v4-pro for complex reasoning (synthesis, editing, writing)
 
 Configured via environment variables:
   PIPELINE_FAST_BASE_URL / PIPELINE_FAST_API_KEY / PIPELINE_FAST_MODEL
@@ -18,10 +18,11 @@ from expert_digest.generation.llm_client import AnthropicCompatibleClient
 _PREFIX_FAST = "PIPELINE_FAST_"
 _PREFIX_REASONING = "PIPELINE_REASONING_"
 _DEFAULT_TIMEOUT = 120
-_DEFAULT_MAX_TOKENS = 8192
+_DEFAULT_FAST_MAX_TOKENS = 8192
+_DEFAULT_REASONING_MAX_TOKENS = 16384
 
 
-def _create_client(prefix: str) -> AnthropicCompatibleClient | None:
+def _create_client(prefix: str, max_output_tokens: int) -> AnthropicCompatibleClient | None:
     base_url = os.environ.get(f"{prefix}BASE_URL")
     api_key = os.environ.get(f"{prefix}API_KEY")
     model = os.environ.get(f"{prefix}MODEL")
@@ -32,18 +33,18 @@ def _create_client(prefix: str) -> AnthropicCompatibleClient | None:
         api_key=api_key,
         model=model,
         timeout_seconds=_DEFAULT_TIMEOUT,
-        max_output_tokens=_DEFAULT_MAX_TOKENS,
+        max_output_tokens=max_output_tokens,
     )
 
 
 def create_fast_client() -> AnthropicCompatibleClient | None:
-    """Create the fast LLM client for normal analysis tasks (讯飞星辰)."""
-    return _create_client(_PREFIX_FAST)
+    """Create the fast LLM client (DeepSeek v4-flash)."""
+    return _create_client(_PREFIX_FAST, _DEFAULT_FAST_MAX_TOKENS)
 
 
 def create_reasoning_client() -> AnthropicCompatibleClient | None:
-    """Create the reasoning LLM client for complex tasks (DeepSeek v4-pro)."""
-    return _create_client(_PREFIX_REASONING)
+    """Create the reasoning LLM client (DeepSeek v4-pro)."""
+    return _create_client(_PREFIX_REASONING, _DEFAULT_REASONING_MAX_TOKENS)
 
 
 def require_fast_client() -> AnthropicCompatibleClient:
