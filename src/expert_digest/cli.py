@@ -71,6 +71,7 @@ from expert_digest.wiki.writer import write_analysis_to_vault
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ExpertDigest command line interface."""
+    _load_env_dotenv()
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -771,26 +772,59 @@ def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None
     )
 
 
+def _load_env_dotenv() -> None:
+    """Load KEY=VALUE pairs from .env file into process environment variables.
+
+    Minimal implementation — no ``python-dotenv`` dependency required.
+    Skips comment (``#``) and blank lines.  Does **not** override variables
+    already present in ``os.environ``.
+    """
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
 def _load_pipeline_env() -> None:
-    """Set pipeline LLM provider env vars from project .env convention."""
-    os.environ.setdefault(
+    """Require pipeline LLM provider env vars, raising a clear error if missing.
+
+    Expected variables (set them in ``.env`` or in the shell):
+
+    * ``PIPELINE_FAST_BASE_URL`` / ``PIPELINE_FAST_API_KEY`` / ``PIPELINE_FAST_MODEL``
+    * ``PIPELINE_REASONING_BASE_URL`` / ``PIPELINE_REASONING_API_KEY`` / ``PIPELINE_REASONING_MODEL``
+    """
+    _REQUIRED_PIPELINE_VARS = (
         "PIPELINE_FAST_BASE_URL",
-        "https://api.deepseek.com/anthropic",
-    )
-    os.environ.setdefault(
         "PIPELINE_FAST_API_KEY",
-        "sk-d64338556de742eda4ad76a7de28652d",
-    )
-    os.environ.setdefault("PIPELINE_FAST_MODEL", "deepseek-v4-flash")
-    os.environ.setdefault(
+        "PIPELINE_FAST_MODEL",
         "PIPELINE_REASONING_BASE_URL",
-        "https://api.deepseek.com/anthropic",
-    )
-    os.environ.setdefault(
         "PIPELINE_REASONING_API_KEY",
-        "sk-d64338556de742eda4ad76a7de28652d",
+        "PIPELINE_REASONING_MODEL",
     )
-    os.environ.setdefault("PIPELINE_REASONING_MODEL", "deepseek-v4-pro")
+    missing = [var for var in _REQUIRED_PIPELINE_VARS if not os.environ.get(var)]
+    if missing:
+        raise RuntimeError(
+            "Pipeline LLM environment variables are not set.\n"
+            "Missing: " + ", ".join(missing) + "\n\n"
+            "Create a .env file in the project root. Example:\n"
+            "  PIPELINE_FAST_BASE_URL=https://api.deepseek.com/anthropic\n"
+            "  PIPELINE_FAST_API_KEY=sk-your-key-here\n"
+            "  PIPELINE_FAST_MODEL=deepseek-v4-flash\n"
+            "  PIPELINE_REASONING_BASE_URL=https://api.deepseek.com/anthropic\n"
+            "  PIPELINE_REASONING_API_KEY=sk-your-key-here\n"
+            "  PIPELINE_REASONING_MODEL=deepseek-v4-pro\n\n"
+            "Or copy .env.example:\n"
+            "  cp .env.example .env\n"
+            "  # then edit .env with your real API keys"
+        )
 
 
 def _run_generation_quality_gate(
