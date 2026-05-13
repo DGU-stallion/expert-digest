@@ -1,4 +1,4 @@
-"""Mental model extraction from analysis results via LLM."""
+"""Mental model extraction from analysis results + original text via LLM."""
 
 from __future__ import annotations
 
@@ -9,13 +9,14 @@ from expert_digest.pipeline.llm import require_reasoning_client
 from expert_digest.pipeline.state import DigestState, MentalModel
 
 _THINKER_SYSTEM_PROMPT = """\
-你是一位认知科学家。你的任务是从作者的文章分析结果中提炼其思维体系。
+你是一位认知科学家。你的任务是从作者的文章分析结果和原文中提炼其思维体系。
 
 已有分析数据：
 - 核心主题（themes）：作者的核心思想领域
 - 关键概念（concepts）：作者常用的专业术语
 - 思维模式（thinking_patterns）：作者典型的推理方式
 - 表达DNA（expression_dna）：作者的表达风格特征
+- 原文摘录：作者文章片段，作为证据源
 
 请提炼：
 1. **心智模型**（3-7个）：作者反复使用的分析框架/思维工具，每个模型需包含名称、一句话概括、证据片段、应用场景、局限性
@@ -29,7 +30,7 @@ _THINKER_SYSTEM_PROMPT = """\
     {
       "name": "模型名称",
       "summary": "一句话概括",
-      "evidence_snippet": "原文证据片段",
+      "evidence_snippet": "从原文中提取的真实证据片段",
       "application": "应用场景",
       "limitation": "局限性"
     }
@@ -49,6 +50,7 @@ def _build_thinker_prompt(state: DigestState) -> str:
     concepts = state.get("concepts", [])
     patterns = state.get("thinking_patterns", [])
     dna = state.get("expression_dna")
+    documents = state.get("documents", [])
 
     parts: list[str] = []
     if themes:
@@ -67,14 +69,28 @@ def _build_thinker_prompt(state: DigestState) -> str:
         parts.append(f"## 表达DNA\n句式特点：{dna.sentence_patterns}")
         parts.append(f"高频短语：{dna.high_frequency_phrases}")
 
+    # Include original text excerpts as evidence source for mental models
+    if documents:
+        parts.append("## 原文摘录（从中提取心智模型的证据片段）")
+        for doc in documents[:10]:
+            title = doc.get("title", "").strip()
+            content = doc.get("content", "").strip()
+            excerpt = content[:600] if len(content) > 600 else content
+            parts.append(f"### {title}\n{excerpt}")
+
     return "\n".join(parts)
 
 
 def run_extract_mental_models(state: DigestState) -> dict:
-    """Extract mental models, heuristics, values, and boundaries from analysis data."""
+    """Extract mental models, heuristics, values, and boundaries from analysis + docs."""
     themes = state.get("themes", [])
     if not themes:
-        return {"mental_models": [], "decision_heuristics": [], "values_antipatterns": {}, "honest_boundaries": []}
+        return {
+            "mental_models": [],
+            "decision_heuristics": [],
+            "values_antipatterns": {},
+            "honest_boundaries": [],
+        }
 
     llm = require_reasoning_client()
     user_prompt = _build_thinker_prompt(state)

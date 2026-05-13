@@ -28,9 +28,6 @@ data/raw/
 data/processed/
 data/vector_store/
 data/outputs/*
-!data/outputs/handbook.md
-!data/outputs/skill.md
-!data/outputs/handbook.trace.json
 data/wiki/
 !data/.gitkeep
 !data/sample/

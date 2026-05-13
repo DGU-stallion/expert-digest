@@ -1,4 +1,4 @@
-"""Expression DNA analysis node: LLM-driven stylistic and intellectual profiling."""
+"""Expression DNA analysis: LLM-driven stylistic and intellectual profiling."""
 
 from __future__ import annotations
 
@@ -29,18 +29,30 @@ _EXPRESSION_SYSTEM_PROMPT = """\
 }"""
 
 
-def _build_user_prompt(documents: list[dict]) -> str:
+def _build_prompt(wiki_pages: list[dict], documents: list[dict]) -> str:
+    """Build prompt from wiki source pages + full doc excerpts."""
     parts: list[str] = []
-    # Sample up to 15 docs to keep prompt within model's thinking budget
-    sampled = documents[:15]
-    for doc in sampled:
+    author = documents[0].get("author", "未知") if documents else "未知"
+
+    # Prefer wiki source pages for richer stylistic context
+    sources = [p for p in wiki_pages if p.get("page_type") == "source"]
+    if sources:
+        for s in sources[:20]:
+            title = s.get("title", "")
+            body = s.get("body", "")
+            excerpt = body[:500] if len(body) > 500 else body
+            parts.append(f"## {title}\n{excerpt}")
+
+    # Also sample full documents for deeper analysis
+    for doc in documents[:8]:
         title = doc.get("title", "").strip()
         content = doc.get("content", "").strip()
-        excerpt = content[:300] if len(content) > 300 else content
-        parts.append(f"## {title}\n{excerpt}")
+        excerpt = content[:800] if len(content) > 800 else content
+        if excerpt:
+            parts.append(f"## {title}\n{excerpt}")
+
     return (
-        f"以下是作者 {documents[0].get('author', '未知') if sampled else '未知'} "
-        f"的 {len(sampled)} 篇文章抽样，请分析其表达特征。\n\n"
+        f"以下是作者 {author} 的文章素材，请分析其表达特征。\n\n"
         + "\n\n".join(parts)
     )
 
@@ -55,8 +67,9 @@ def run_analyze_expression(state: DigestState) -> dict:
             "key_decisions": [],
         }
 
+    wiki_pages = state.get("wiki_pages", [])
     llm = require_fast_client()
-    user_prompt = _build_user_prompt(documents)
+    user_prompt = _build_prompt(wiki_pages, documents)
     raw = llm.generate(
         system_prompt=_EXPRESSION_SYSTEM_PROMPT,
         user_prompt=user_prompt,

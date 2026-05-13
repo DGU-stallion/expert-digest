@@ -1,4 +1,4 @@
-"""Data loading node: loads and cleans documents from SQLite into pipeline state."""
+"""Data loading node: loads documents and wiki pages into pipeline state."""
 
 from __future__ import annotations
 
@@ -10,37 +10,60 @@ from expert_digest.storage.sqlite_store import (
     get_documents_by_author,
     list_documents,
 )
-
-_MAX_DOCS_FOR_ANALYSIS = 30
+from expert_digest.wiki.vault import WikiVault
 
 
 def run_load_data(state: DigestState) -> dict:
-    """Load documents from SQLite database and sample for LLM analysis.
-
-    Reads the configured db_path and author from state, loads documents,
-    and writes a sampled subset to ``documents`` for downstream analysis.
-    """
+    """Load documents from SQLite and wiki pages from vault into pipeline state."""
     db_path = state.get("db_path", "")
+    wiki_root = state.get("wiki_root", "")
     author = state.get("author", "")
+    errors: list = state.get("errors", [])
 
-    if not db_path or not Path(db_path).exists():
-        return {"documents": [], "errors": state.get("errors", [])}
+    documents: list[dict] = []
+    if db_path and Path(db_path).exists():
+        if author:
+            docs = get_documents_by_author(db_path, author)
+        else:
+            docs = list_documents(db_path)
+        documents = [
+            {
+                "id": d.id,
+                "title": d.title,
+                "content": clean_text(d.content or ""),
+                "author": d.author,
+                "url": d.url,
+                "created_at": d.created_at,
+            }
+            for d in docs
+        ]
 
-    if author:
-        docs = get_documents_by_author(db_path, author)
-    else:
-        docs = list_documents(db_path)
+    wiki_pages: list[dict] = []
+    if wiki_root and Path(wiki_root).exists():
+        try:
+            vault = WikiVault(root=Path(wiki_root))
+            pages = vault.list_pages()
+            wiki_pages = [
+                {
+                    "path": p.path,
+                    "page_type": p.page_type,
+                    "title": p.title,
+                    "body": p.body,
+                    "sources": [
+                        {"source_id": s.source_id, "title": s.title, "url": s.url}
+                        for s in p.sources
+                    ],
+                    "confidence": p.confidence,
+                }
+                for p in pages
+            ]
+        except Exception as exc:
+            errors.append(
+                {"node": "load_data", "message": f"failed to load wiki: {exc}"}
+            )
 
-    sampled = docs[:_MAX_DOCS_FOR_ANALYSIS]
-    serialized = [
-        {
-            "id": d.id,
-            "title": d.title,
-            "content": clean_text(d.content or ""),
-            "author": d.author,
-            "url": d.url,
-            "created_at": d.created_at,
-        }
-        for d in sampled
-    ]
-    return {"documents": serialized}
+    return {
+        "documents": documents,
+        "wiki_pages": wiki_pages,
+        "errors": errors,
+    }

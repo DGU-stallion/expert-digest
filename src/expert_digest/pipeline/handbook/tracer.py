@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from expert_digest.pipeline.state import ChapterPlan, DigestState
@@ -27,7 +27,7 @@ def run_build_trace(state: DigestState) -> dict:
 
     trace: dict[str, object] = {
         "author": state.get("author", ""),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "total_chapters": len(chapters),
         "total_documents": len(documents),
         "total_clusters": len(clusters),

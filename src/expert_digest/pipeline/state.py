@@ -96,8 +96,11 @@ class DigestState(TypedDict):
     wiki_root: str
     author: str
 
-    # Loaded documents (sampled for LLM analysis)
+    # Loaded documents
     documents: list[dict[str, Any]]
+
+    # Wiki pages (loaded from wiki vault if available)
+    wiki_pages: list[dict[str, Any]]
 
     # Analysis phase output
     themes: list[Theme]
@@ -147,6 +150,7 @@ def make_initial_state(
         wiki_root=str(wiki_root),
         author=author,
         documents=[],
+        wiki_pages=[],
         themes=[],
         concepts=[],
         thinking_patterns=[],

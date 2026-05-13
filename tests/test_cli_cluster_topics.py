@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from expert_digest.cli import main
-from expert_digest.domain.models import ChunkEmbedding, Handbook
+from expert_digest.domain.models import ChunkEmbedding
 from expert_digest.knowledge.topic_clusterer import (
     LLMTopicLabeler,
     TopicCluster,

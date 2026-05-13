@@ -9,18 +9,12 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
-from time import perf_counter
 
 from expert_digest import __version__
-from expert_digest.domain.models import Handbook
-from expert_digest.generation.llm_client import (
-    DEFAULT_LLM_PROVIDER_DB_PATH,
-    AnthropicCompatibleClient,
-)
+from expert_digest.generation.llm_client import AnthropicCompatibleClient
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
-from expert_digest.knowledge.author_profile import build_author_profile
 from expert_digest.knowledge.topic_clusterer import (
     DeterministicTopicLabeler,
     LLMTopicLabeler,
@@ -28,7 +22,6 @@ from expert_digest.knowledge.topic_clusterer import (
     build_topic_clusters,
 )
 from expert_digest.knowledge.topic_report import build_topic_report
-from expert_digest.mcp.server import run_mcp_server
 from expert_digest.pipeline.graph import compile_pipeline
 from expert_digest.pipeline.llm import require_fast_client
 from expert_digest.pipeline.state import make_initial_state
@@ -41,8 +34,6 @@ from expert_digest.processing.embedder import (
 )
 from expert_digest.processing.evidence_builder import build_document_evidence
 from expert_digest.processing.splitter import split_documents
-from expert_digest.rag.answering import StructuredAnswer
-from expert_digest.rag.query_service import answer_question
 from expert_digest.retrieval.retriever import rank_chunk_embeddings
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
@@ -288,72 +279,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         return 0
 
-    if args.command == "ask":
-        result = answer_question(
-            question=args.query,
-            db_path=args.db,
-            model=args.model,
-            top_k=args.top_k,
-            min_score=args.min_score,
-            min_top_score=args.min_top_score,
-            min_avg_score=args.min_avg_score,
-            max_evidence=args.max_evidence,
-        )
-        _emit_structured_answer(result, output_format=args.format)
-        return 0
-
-    if args.command == "generate-handbook":
-        if args.wiki_root_for_quality is not None:
-            error = _run_generation_quality_gate(
-                wiki_root=args.wiki_root_for_quality,
-                expected_source_count=args.expected_source_count_for_quality,
-                max_lint_issues=args.max_lint_issues_for_quality,
-            )
-            if error is not None:
-                print(f"Failed quality gate: {error}")
-                return 1
-        _load_pipeline_env()
-        state = make_initial_state(
-            db_path=args.db,
-            wiki_root=args.wiki_root or "",
-            author=args.author or "",
-            output_dir=str(args.output.parent) if args.output else "data/outputs",
-        )
-        pipeline = compile_pipeline()
-        try:
-            result = pipeline.invoke(state)
-        except (RuntimeError, ValueError) as error:
-            print(f"Failed to generate handbook: {error}")
-            return 1
-        handbook_md = result.get("handbook_markdown", "")
-        if not handbook_md.strip():
-            doc_count = len(result.get("documents", []))
-            if args.format == "json":
-                _print_json_safely({
-                    "author": args.author or "",
-                    "document_count": doc_count,
-                    "status": "empty_handbook",
-                })
-            else:
-                print(
-                    f"Pipeline completed: loaded {doc_count} documents, "
-                    "handbook output is empty."
-                )
-            return 0
-        output_path = args.output or Path("data/outputs/handbook.md")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(handbook_md, encoding="utf-8")
-        if args.format == "json":
-            _print_json_safely({
-                "author": args.author or "",
-                "output_path": str(output_path),
-                "handbook_length": len(handbook_md),
-                "status": "generated",
-            })
-        else:
-            print(f"Generated handbook: {output_path}")
-        return 0
-
     if args.command == "cluster-topics":
         llm_client: AnthropicCompatibleClient | None = None
         topic_labeler = DeterministicTopicLabeler()
@@ -400,54 +325,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    if args.command == "build-author-profile":
-        try:
-            profile = build_author_profile(
-                db_path=args.db,
-                author=args.author,
-                max_topics=args.max_topics,
-                max_keywords=args.max_keywords,
-                max_patterns=args.max_patterns,
-            )
-        except ValueError as error:
-            print(f"Failed to build author profile: {error}")
-            return 1
-        payload = _emit_author_profile(profile=profile, output_format=args.format)
-        if args.output is not None:
-            _save_run_metadata(payload=payload, output_path=args.output)
-        return 0
-
-    if args.command == "generate-skill-draft":
-        print(
-            "Note: 'generate-skill-draft' is superseded by 'generate-skill-pipeline'. "
-            "Redirecting to pipeline...",
-            flush=True,
-        )
-        # Delegate to the LangGraph pipeline
-        _load_pipeline_env()
-        state = make_initial_state(
-            db_path=args.db,
-            wiki_root=getattr(args, "wiki_root", "") or "",
-            author=args.author or "",
-            output_dir=str(args.output.parent) if args.output else "data/outputs",
-        )
-        try:
-            pipeline = compile_pipeline()
-            result = pipeline.invoke(state)
-            skill_md = result.get("skill_markdown", "")
-        except RuntimeError as error:
-            print(f"Failed to generate SKILL: {error}", flush=True)
-            return 1
-        if not skill_md.strip():
-            print("Pipeline completed but SKILL output is empty.", flush=True)
-            return 0
-        output_path = args.output or Path("data/outputs/skill.md")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(skill_md, encoding="utf-8")
-        print(f"Generated SKILL via pipeline: {output_path}")
-        return 0
-
-    if args.command == "generate-handbook-pipeline":
+    if args.command == "generate-handbook":
         _load_pipeline_env()
         state = make_initial_state(
             db_path=args.db,
@@ -456,7 +334,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=str(args.output.parent) if args.output else "data/outputs",
         )
         pipeline = compile_pipeline()
-        result = pipeline.invoke(state)
+        try:
+            result = pipeline.invoke(state)
+        except (RuntimeError, ValueError) as error:
+            print(f"Failed to generate handbook: {error}")
+            return 1
         handbook_md = result.get("handbook_markdown", "")
         if not handbook_md.strip():
             doc_count = len(result.get("documents", []))
@@ -471,7 +353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Generated handbook via pipeline: {output_path}")
         return 0
 
-    if args.command == "generate-skill-pipeline":
+    if args.command == "generate-skill":
         _load_pipeline_env()
         state = make_initial_state(
             db_path=args.db,
@@ -480,7 +362,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=str(args.output.parent) if args.output else "data/outputs",
         )
         pipeline = compile_pipeline()
-        result = pipeline.invoke(state)
+        try:
+            result = pipeline.invoke(state)
+        except RuntimeError as error:
+            print(f"Failed to generate SKILL: {error}")
+            return 1
         skill_md = result.get("skill_markdown", "")
         if not skill_md.strip():
             doc_count = len(result.get("documents", []))
@@ -493,19 +379,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(skill_md, encoding="utf-8")
         print(f"Generated SKILL via pipeline: {output_path}")
-        return 0
-
-    if args.command == "run-mcp-server":
-        try:
-            run_mcp_server(
-                db_path=args.db,
-                model=args.model,
-                output_dir=args.output_dir,
-                transport=args.transport,
-            )
-        except RuntimeError as error:
-            print(f"Failed to start MCP server: {error}")
-            return 1
         return 0
 
     parser.print_help()
@@ -602,69 +475,6 @@ def _build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("--author")
     list_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
 
-    ask_parser = subparsers.add_parser("ask")
-    ask_parser.add_argument("query")
-    ask_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    ask_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
-    ask_parser.add_argument("--top-k", type=int, default=3)
-    ask_parser.add_argument("--min-score", type=float, default=0.05)
-    ask_parser.add_argument("--min-top-score", type=float, default=None)
-    ask_parser.add_argument("--min-avg-score", type=float, default=0.03)
-    ask_parser.add_argument("--max-evidence", type=int, default=3)
-    ask_parser.add_argument("--format", choices=["text", "json"], default="text")
-
-    handbook_parser = subparsers.add_parser("generate-handbook")
-    handbook_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    handbook_parser.add_argument("--author")
-    handbook_parser.add_argument("--wiki-root", type=Path, default=None)
-    handbook_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
-    handbook_parser.add_argument("--top-k", type=int, default=6)
-    handbook_parser.add_argument("--max-themes", type=int, default=6)
-    handbook_parser.add_argument(
-        "--theme-source",
-        choices=["preset", "cluster"],
-        default="preset",
-    )
-    handbook_parser.add_argument("--num-topics", type=int, default=10)
-    handbook_parser.add_argument("--topic-taxonomy", type=Path, default=None)
-    handbook_parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("data/outputs/handbook.md"),
-    )
-    handbook_parser.add_argument(
-        "--synthesis-mode",
-        choices=["deterministic", "hybrid"],
-        default="hybrid",
-    )
-    handbook_parser.add_argument(
-        "--llm-config-db",
-        "--ccswitch-db",
-        type=Path,
-        dest="llm_config_db",
-        default=DEFAULT_LLM_PROVIDER_DB_PATH,
-    )
-    handbook_parser.add_argument("--llm-timeout", type=int, default=30)
-    handbook_parser.add_argument("--llm-max-tokens", type=int, default=700)
-    handbook_parser.add_argument("--format", choices=["text", "json"], default="text")
-    handbook_parser.add_argument("--save-run-metadata", type=Path, default=None)
-    handbook_parser.add_argument("--wiki-root-for-quality", type=Path, default=None)
-    handbook_parser.add_argument(
-        "--expected-source-count-for-quality",
-        type=int,
-        default=0,
-    )
-    handbook_parser.add_argument(
-        "--max-lint-issues-for-quality",
-        type=int,
-        default=40,
-    )
-    handbook_parser.add_argument(
-        "--max-handbook-duplicate-ratio-for-quality",
-        type=float,
-        default=0.35,
-    )
-
     cluster_parser = subparsers.add_parser("cluster-topics")
     cluster_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     cluster_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
@@ -676,92 +486,27 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["deterministic", "llm"],
         default="deterministic",
     )
-    cluster_parser.add_argument(
-        "--llm-config-db",
-        "--ccswitch-db",
-        type=Path,
-        dest="llm_config_db",
-        default=DEFAULT_LLM_PROVIDER_DB_PATH,
-    )
     cluster_parser.add_argument("--llm-timeout", type=int, default=20)
     cluster_parser.add_argument("--report-output", type=Path, default=None)
     cluster_parser.add_argument("--format", choices=["text", "json"], default="text")
 
-    profile_parser = subparsers.add_parser("build-author-profile")
-    profile_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    profile_parser.add_argument("--author")
-    profile_parser.add_argument("--max-topics", type=int, default=6)
-    profile_parser.add_argument("--max-keywords", type=int, default=12)
-    profile_parser.add_argument("--max-patterns", type=int, default=5)
-    profile_parser.add_argument("--output", type=Path, default=None)
-    profile_parser.add_argument("--format", choices=["text", "json"], default="text")
-
-    skill_parser = subparsers.add_parser("generate-skill-draft")
-    skill_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    skill_parser.add_argument("--author")
-    skill_parser.add_argument("--output", type=Path, default=None)
-    skill_parser.add_argument("--wiki-root-for-quality", type=Path, default=None)
-    skill_parser.add_argument(
-        "--expected-source-count-for-quality",
-        type=int,
-        default=0,
-    )
-    skill_parser.add_argument(
-        "--max-lint-issues-for-quality",
-        type=int,
-        default=40,
-    )
-
-    hb_pipeline_parser = subparsers.add_parser("generate-handbook-pipeline")
-    hb_pipeline_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    hb_pipeline_parser.add_argument("--author", default=None)
-    hb_pipeline_parser.add_argument("--wiki-root", type=Path, default=None)
-    hb_pipeline_parser.add_argument(
+    hb_parser = subparsers.add_parser("generate-handbook")
+    hb_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    hb_parser.add_argument("--author", default=None)
+    hb_parser.add_argument("--wiki-root", type=Path, default=None)
+    hb_parser.add_argument(
         "--output", type=Path, default=Path("data/outputs/handbook.md")
     )
 
-    sk_pipeline_parser = subparsers.add_parser("generate-skill-pipeline")
-    sk_pipeline_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    sk_pipeline_parser.add_argument("--author", default=None)
-    sk_pipeline_parser.add_argument("--wiki-root", type=Path, default=None)
-    sk_pipeline_parser.add_argument(
+    sk_parser = subparsers.add_parser("generate-skill")
+    sk_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    sk_parser.add_argument("--author", default=None)
+    sk_parser.add_argument("--wiki-root", type=Path, default=None)
+    sk_parser.add_argument(
         "--output", type=Path, default=Path("data/outputs/skill.md")
     )
 
-    mcp_parser = subparsers.add_parser("run-mcp-server")
-    mcp_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    mcp_parser.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
-    mcp_parser.add_argument("--output-dir", type=Path, default=Path("data/outputs"))
-    mcp_parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
-
     return parser
-
-
-def _emit_structured_answer(result: StructuredAnswer, *, output_format: str) -> None:
-    if output_format == "json":
-        _print_json_safely(asdict(result))
-        return
-    _print_structured_answer(result)
-
-
-def _print_structured_answer(result: StructuredAnswer) -> None:
-    print(f"回答: {result.answer}")
-    print("依据:")
-    if not result.evidence:
-        print("- (无)")
-    else:
-        for index, item in enumerate(result.evidence, start=1):
-            print(
-                f"- {index}. score={item.score:.4f} "
-                f"{item.title} / {item.author} / {item.snippet}"
-            )
-    print("推荐原文:")
-    if not result.recommended_original:
-        print("- (无)")
-    else:
-        for index, label in enumerate(result.recommended_original, start=1):
-            print(f"- {index}. {label}")
-    print(f"不确定性: {result.uncertainty}")
 
 
 def _save_run_metadata(*, payload: dict[str, object], output_path: Path) -> None:
@@ -799,7 +544,8 @@ def _load_pipeline_env() -> None:
     Expected variables (set them in ``.env`` or in the shell):
 
     * ``PIPELINE_FAST_BASE_URL`` / ``PIPELINE_FAST_API_KEY`` / ``PIPELINE_FAST_MODEL``
-    * ``PIPELINE_REASONING_BASE_URL`` / ``PIPELINE_REASONING_API_KEY`` / ``PIPELINE_REASONING_MODEL``
+    * ``PIPELINE_REASONING_BASE_URL`` / ``PIPELINE_REASONING_API_KEY`` /
+      ``PIPELINE_REASONING_MODEL``
     """
     _REQUIRED_PIPELINE_VARS = (
         "PIPELINE_FAST_BASE_URL",
@@ -825,67 +571,6 @@ def _load_pipeline_env() -> None:
             "  cp .env.example .env\n"
             "  # then edit .env with your real API keys"
         )
-
-
-def _run_generation_quality_gate(
-    *,
-    wiki_root: Path,
-    expected_source_count: int,
-    max_lint_issues: int,
-) -> str | None:
-    if expected_source_count < 0:
-        return "expected_source_count_for_quality must be >= 0"
-    if max_lint_issues < 0:
-        return "max_lint_issues_for_quality must be >= 0"
-    if not wiki_root.exists():
-        return f"wiki root not found: {wiki_root}"
-
-    vault = WikiVault(root=wiki_root)
-    eval_report = evaluate_wiki(
-        vault=vault,
-        expected_source_count=expected_source_count,
-    )
-    if eval_report.traceability_ratio < 1.0:
-        return f"traceability_ratio={eval_report.traceability_ratio} < 1.0"
-    if expected_source_count > 0 and eval_report.coverage_ratio < 1.0:
-        return (
-            f"coverage_ratio={eval_report.coverage_ratio} < 1.0 "
-            f"(expected_source_count={expected_source_count})"
-        )
-
-    lint_report = lint_wiki(vault=vault)
-    if lint_report.issue_count > max_lint_issues:
-        return (
-            f"issue_count={lint_report.issue_count} exceeds "
-            f"max_lint_issues={max_lint_issues}"
-        )
-    return None
-
-
-def _run_handbook_output_quality_gate(
-    *,
-    markdown: str,
-    trace_sidecar_path: Path,
-    max_duplicate_ratio: float,
-) -> str | None:
-    if max_duplicate_ratio < 0:
-        return "max_handbook_duplicate_ratio_for_quality must be >= 0"
-    report = evaluate_handbook_quality(
-        markdown=markdown,
-        trace_sidecar_path=trace_sidecar_path,
-    )
-    if not report.structure_complete:
-        return "handbook_structure_incomplete"
-    if report.has_external_links:
-        return "handbook_has_external_links"
-    if report.duplicate_paragraph_ratio > max_duplicate_ratio:
-        return (
-            "handbook_duplicate_ratio_exceeded: "
-            f"{report.duplicate_paragraph_ratio} > {max_duplicate_ratio}"
-        )
-    if report.coverage_ratio < 1.0:
-        return f"handbook_trace_coverage_incomplete: {report.coverage_ratio} < 1.0"
-    return None
 
 
 def _document_evidence_from_store(
@@ -920,15 +605,6 @@ def _emit_topic_clusters(
     _print_topic_clusters(topics, metadata=metadata)
 
 
-def _emit_author_profile(*, profile: object, output_format: str) -> dict[str, object]:
-    payload = profile if isinstance(profile, dict) else asdict(profile)
-    if output_format == "json":
-        _print_json_safely(payload)
-        return payload
-    _print_author_profile(payload)
-    return payload
-
-
 def _print_json_safely(payload: object) -> None:
     text = json.dumps(payload, ensure_ascii=False)
     try:
@@ -947,37 +623,6 @@ def _print_text_safely(text: str) -> None:
     except UnicodeEncodeError:
         sys.stdout.write(text.encode("ascii", "backslashreplace").decode("ascii"))
         sys.stdout.write("\n")
-
-
-def _print_author_profile(profile: dict[str, object]) -> None:
-    print(
-        f"Author profile for {profile.get('author')}: "
-        f"documents={profile.get('document_count')}"
-    )
-    focus_topics = profile.get("focus_topics", [])
-    if isinstance(focus_topics, list):
-        focus_topics_text = (
-            ", ".join(str(item) for item in focus_topics) if focus_topics else "(无)"
-        )
-        print("Focus topics: " + focus_topics_text)
-    keywords = profile.get("keywords", [])
-    if isinstance(keywords, list):
-        print("Top keywords:")
-        if not keywords:
-            print("- (无)")
-        else:
-            for item in keywords:
-                if isinstance(item, dict):
-                    print(f"- {item.get('keyword')} ({item.get('count')})")
-    patterns = profile.get("reasoning_patterns", [])
-    if isinstance(patterns, list):
-        print("Reasoning patterns:")
-        if not patterns:
-            print("- (无)")
-        else:
-            for item in patterns:
-                if isinstance(item, dict):
-                    print(f"- {item.get('pattern')} ({item.get('count')})")
 
 
 def _print_topic_clusters(

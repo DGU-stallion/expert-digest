@@ -31,19 +31,42 @@ _ANALYZER_SYSTEM_PROMPT = """\
 }"""
 
 
-def _build_user_prompt(documents: list[dict]) -> str:
-    """Build a prompt with document excerpts for LLM analysis."""
+def _build_wiki_prompt(wiki_pages: list[dict], documents: list[dict]) -> str:
+    """Build prompt from wiki topic/concept pages, falling back to documents."""
     parts: list[str] = []
-    sampled = documents[:20]
-    for doc in sampled:
-        title = doc.get("title", "").strip()
-        content = doc.get("content", "").strip()
-        excerpt = content[:300] if len(content) > 300 else content
-        parts.append(f"## {title}\n{excerpt}")
+    author = documents[0].get("author", "未知") if documents else "未知"
+
+    topics = [p for p in wiki_pages if p.get("page_type") == "topic"]
+    concepts = [p for p in wiki_pages if p.get("page_type") == "concept"]
+
+    if topics:
+        parts.append(f"## Wiki 主题（共 {len(topics)} 个）")
+        for t in topics[:10]:
+            title = t.get("title", "")
+            body = t.get("body", "")
+            excerpt = body[:500] if len(body) > 500 else body
+            parts.append(f"### {title}\n{excerpt}")
+
+    if concepts:
+        parts.append(f"\n## Wiki 概念（共 {len(concepts)} 个）")
+        for c in concepts[:15]:
+            title = c.get("title", "")
+            body = c.get("body", "")
+            excerpt = body[:300] if len(body) > 300 else body
+            parts.append(f"### {title}\n{excerpt}")
+
+    # If no wiki data, fall back to document excerpts
+    if not topics and not concepts:
+        sampled = documents[:20]
+        for doc in sampled:
+            title = doc.get("title", "").strip()
+            content = doc.get("content", "").strip()
+            excerpt = content[:300] if len(content) > 300 else content
+            parts.append(f"## {title}\n{excerpt}")
+
     return (
-        f"以下是作者 {sampled[0].get('author', '未知') if sampled else '未知'} "
-        f"的 {len(sampled)} 篇文章抽样，请进行分析。\n\n"
-        + "\n\n".join(parts)
+        f"以下是作者 {author} 的内容分析素材。"
+        + ("\n\n" + "\n\n".join(parts))
     )
 
 
@@ -51,14 +74,11 @@ def run_analyze_content(state: DigestState) -> dict:
     """Analyze content to extract themes, concepts, and thinking patterns."""
     documents = state.get("documents", [])
     if not documents:
-        return {
-            "themes": [],
-            "concepts": [],
-            "thinking_patterns": [],
-        }
+        return {"themes": [], "concepts": [], "thinking_patterns": []}
 
+    wiki_pages = state.get("wiki_pages", [])
     llm = require_reasoning_client()
-    user_prompt = _build_user_prompt(documents)
+    user_prompt = _build_wiki_prompt(wiki_pages, documents)
     raw = llm.generate(
         system_prompt=_ANALYZER_SYSTEM_PROMPT,
         user_prompt=user_prompt,
@@ -87,10 +107,7 @@ def _build_themes(
     raw_themes: list[dict],
     documents: list[dict],
 ) -> list[Theme]:
-    """Convert raw theme dicts from LLM into Theme dataclass instances.
-
-    Matches source_titles back to document IDs for traceability.
-    """
+    """Convert raw theme dicts from LLM into Theme dataclass instances."""
     title_to_id = {doc.get("title", ""): doc.get("id", "") for doc in documents}
     result: list[Theme] = []
     for item in raw_themes[:6]:
@@ -137,7 +154,6 @@ def _parse_analysis_json(raw: str) -> dict:
         return {}
     if not isinstance(parsed, dict):
         return {}
-    # Normalize keys: LLMs sometimes change key names (e.g. "core_themes" vs "themes")
     key_map = {
         "core_themes": "themes",
         "key_concepts": "concepts",

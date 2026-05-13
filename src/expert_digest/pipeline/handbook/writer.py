@@ -1,12 +1,9 @@
-"""Chapter drafting node with LLM writing and rewrite feedback support."""
+"""Chapter drafting node with LLM writing, using full-document context."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from expert_digest.pipeline.llm import require_reasoning_client
 from expert_digest.pipeline.state import ChapterDraft, ChapterPlan, DigestState
-from expert_digest.storage.sqlite_store import list_chunks
 
 _WRITER_SYSTEM_PROMPT = """\
 你是一位教育内容作家。你的任务是根据作者的文章原文，为学习手册撰写一个章节。
@@ -28,7 +25,6 @@ def _build_writer_prompt(
     previous_chapters: list[str],
     review_feedback: list[str] | None = None,
 ) -> str:
-    """Build the user prompt for a single chapter draft."""
     prompt = (
         f"请撰写以下章节：\n\n"
         f"## 章节标题\n{plan.title}\n\n"
@@ -60,72 +56,119 @@ def _build_writer_prompt(
     return prompt
 
 
+def _extract_wiki_source_ids(wiki_pages: list[dict]) -> dict[str, set[str]]:
+    """Build a mapping from topic title → set of source document IDs.
+
+    Uses wiki topic pages to map topic labels to their source document IDs,
+    so chapter drafting reads full documents rather than chunk fragments.
+    """
+    topic_to_ids: dict[str, set[str]] = {}
+    for page in wiki_pages:
+        if page.get("page_type") != "topic":
+            continue
+        label = page.get("title", "")
+        ids: set[str] = set()
+        for s in page.get("sources", []):
+            sid = s.get("source_id", "")
+            if sid:
+                ids.add(sid)
+        if label and ids:
+            topic_to_ids[label] = ids
+    return topic_to_ids
+
+
 def _gather_context_for_chapter(
     plan: ChapterPlan,
     state: DigestState,
-    max_chunks_per_chapter: int = 15,
-    max_chars_per_chunk: int = 2000,
+    max_docs: int = 6,
+    max_chars_per_doc: int = 4000,
 ) -> list[str]:
-    """Gather chunk texts relevant to a chapter from topic clusters and documents.
+    """Gather full document texts relevant to a chapter.
 
-    Prefers cluster representative chunks when topic_clusters are available.
-    Falls back to document excerpts when clusters are missing.
+    Matches chapter target themes to:
+    1. Wiki topic pages → source document IDs → full document text
+    2. Topic clusters → representative chunk content (fallback)
+    3. Direct document excerpts (last resort)
     """
-    clusters = state.get("topic_clusters", [])
     documents = state.get("documents", [])
-    chunk_texts: list[str] = []
+    wiki_pages = state.get("wiki_pages", [])
+    doc_map = {d.get("id", ""): d for d in documents}
+    doc_texts: list[str] = []
+    seen_ids: set[str] = set()
 
-    # Try to match chapter target_themes to cluster labels
-    if clusters:
-        doc_id_to_doc = {d.get("id", ""): d for d in documents}
-        matched_chunk_ids: set[str] = set()
+    # Strategy 1: Match via wiki topic pages
+    if wiki_pages:
+        topic_to_ids = _extract_wiki_source_ids(wiki_pages)
+        for theme in plan.target_themes:
+            for topic_label, source_ids in topic_to_ids.items():
+                if theme in topic_label or topic_label in theme:
+                    for sid in source_ids:
+                        if sid in seen_ids or len(doc_texts) >= max_docs:
+                            continue
+                        doc = doc_map.get(sid)
+                        if doc:
+                            title = doc.get("title", "")
+                            content = doc.get("content", "")
+                            if not content:
+                                continue
+                            excerpt = (
+                                content[:max_chars_per_doc]
+                                if len(content) > max_chars_per_doc
+                                else content
+                            )
+                            doc_texts.append(f"### {title}\n{excerpt}")
+                            seen_ids.add(sid)
+
+    # Strategy 2: Match via topic clusters (fallback, no wiki)
+    if not doc_texts:
+        clusters = state.get("topic_clusters", [])
         for cluster in clusters:
             label = cluster.get("label", "")
             if any(t in label for t in plan.target_themes) or any(
                 t in cluster.get("label", "") for t in plan.target_themes
             ):
-                for cid in cluster.get("representative_chunk_ids", [])[:8]:
-                    matched_chunk_ids.add(cid)
+                for d in cluster.get("representative_documents", []):
+                    doc_id = d.get("document_id", "")
+                    if doc_id in seen_ids or len(doc_texts) >= max_docs:
+                        continue
+                    doc = doc_map.get(doc_id)
+                    if doc:
+                        title = doc.get("title", "")
+                        content = doc.get("content", "")
+                        if not content:
+                            continue
+                        excerpt = (
+                            content[:max_chars_per_doc]
+                            if len(content) > max_chars_per_doc
+                            else content
+                        )
+                        doc_texts.append(f"### {title}\n{excerpt}")
+                        seen_ids.add(doc_id)
 
-        if matched_chunk_ids:
-            db_path = state.get("db_path", "")
-            if db_path and Path(db_path).exists():
-                all_chunks = list_chunks(db_path)
-                chunk_map = {c.id: c for c in all_chunks}
-                for cid in matched_chunk_ids:
-                    if cid in chunk_map:
-                        text = chunk_map[cid].text.strip()
-                        if len(text) > max_chars_per_chunk:
-                            text = text[:max_chars_per_chunk] + "..."
-                        doc_title = ""
-                        if chunk_map[cid].document_id in doc_id_to_doc:
-                            doc_title = doc_id_to_doc[chunk_map[cid].document_id].get(
-                                "title", ""
-                            )
-                        header = f"### {doc_title}" if doc_title else "### 原文片段"
-                        chunk_texts.append(f"{header}\n{text}")
-
-    # Fallback: use document excerpts
-    if not chunk_texts:
-        for doc in documents[:8]:
+    # Strategy 3: Direct document excerpts (last resort)
+    if not doc_texts:
+        for doc in documents[:max_docs]:
             title = doc.get("title", "").strip()
             content = doc.get("content", "").strip()
-            excerpt = content[:max_chars_per_chunk] if len(content) > max_chars_per_chunk else content
+            excerpt = (
+                content[:max_chars_per_doc]
+                if len(content) > max_chars_per_doc
+                else content
+            )
             if excerpt:
-                chunk_texts.append(f"### {title}\n{excerpt}")
+                doc_texts.append(f"### {title}\n{excerpt}")
 
-    return chunk_texts[:max_chunks_per_chapter]
+    return doc_texts
 
 
 def run_draft_chapters(state: DigestState) -> dict:
-    """Draft all chapters with cluster-informed context and cross-chapter awareness."""
+    """Draft all chapters with full-document context and cross-chapter awareness."""
     chapter_plan = state.get("chapter_plan", [])
     review_results = state.get("review_results", [])
 
     if not chapter_plan:
         return {}
 
-    # Collect review feedback per chapter for rewrite pass
     feedback_map: dict[str, list[str]] = {}
     for rr in review_results:
         if rr.issues:

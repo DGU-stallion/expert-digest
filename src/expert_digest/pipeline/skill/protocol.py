@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import re
-
 from expert_digest.pipeline.llm import require_fast_client
 from expert_digest.pipeline.state import DigestState
 

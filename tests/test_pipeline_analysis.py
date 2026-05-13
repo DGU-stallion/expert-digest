@@ -10,7 +10,10 @@ from expert_digest.pipeline.nodes.expression import (
     _ensure_str_list,
     _parse_expression_json,
 )
-from expert_digest.pipeline.nodes.quality import run_assess_quality, should_retry_analysis
+from expert_digest.pipeline.nodes.quality import (
+    run_assess_quality,
+    should_retry_analysis,
+)
 from expert_digest.pipeline.state import DigestState, Theme, make_initial_state
 
 

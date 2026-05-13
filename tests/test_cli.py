@@ -1,10 +1,8 @@
 import json
 from io import StringIO
-from pathlib import Path
 
 from expert_digest.cli import _print_json_safely, main
-from expert_digest.domain.models import Document, Handbook
-from expert_digest.rag.answering import AnswerEvidence, StructuredAnswer
+from expert_digest.domain.models import Document
 from expert_digest.storage.sqlite_store import (
     list_chunk_embeddings,
     list_chunks_for_document,
@@ -194,152 +192,6 @@ def test_cli_build_embeddings_and_search_chunks(tmp_path, capsys):
     assert "score=" in search_output
 
 
-def test_cli_ask_refuses_when_no_embeddings(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "expert_digest.cli.answer_question",
-        lambda **_kwargs: StructuredAnswer(
-            answer="抱歉，我无法基于当前知识库回答这个问题。",
-            evidence=[],
-            recommended_original=[],
-            uncertainty="未检索到相关证据，结论风险过高。",
-            refused=True,
-        ),
-    )
-
-    exit_code = main(["ask", "什么是长期主义？"])
-    output = capsys.readouterr().out
-
-    assert exit_code == 0
-    assert "回答:" in output
-    assert "无法基于当前知识库回答" in output
-    assert "依据:" in output
-    assert "推荐原文:" in output
-    assert "不确定性:" in output
-
-
-def test_cli_ask_returns_structured_answer_with_evidence(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "expert_digest.cli.answer_question",
-        lambda **_kwargs: StructuredAnswer(
-            answer="针对问题“泡泡玛特的核心能力是什么？”，当前最相关证据指出：泡泡玛特的核心在于IP运营与预期管理。",
-            evidence=[
-                AnswerEvidence(
-                    chunk_id="chunk-1",
-                    score=0.99,
-                    title="泡泡玛特复盘",
-                    author="黄彦臻",
-                    snippet="泡泡玛特的核心在于IP运营与预期管理。",
-                    url="https://example.com/p1",
-                )
-            ],
-            recommended_original=["泡泡玛特复盘 - https://example.com/p1"],
-            uncertainty="仅检索到 1 条证据。",
-            refused=False,
-        ),
-    )
-
-    exit_code = main(["ask", "泡泡玛特的核心能力是什么？", "--top-k", "1"])
-    output = capsys.readouterr().out
-
-    assert exit_code == 0
-    assert "回答:" in output
-    assert "依据:" in output
-    assert "score=0.9900" in output
-    assert "推荐原文:" in output
-    assert "泡泡玛特复盘" in output
-    assert "不确定性:" in output
-
-
-def test_cli_ask_refuses_when_retrieval_score_below_threshold(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "expert_digest.cli.answer_question",
-        lambda **_kwargs: StructuredAnswer(
-            answer="抱歉，我无法基于当前知识库回答这个问题。",
-            evidence=[],
-            recommended_original=[],
-            uncertainty="证据置信度不足。",
-            refused=True,
-        ),
-    )
-
-    exit_code = main(["ask", "泡泡玛特的核心能力是什么？", "--top-k", "1"])
-    output = capsys.readouterr().out
-
-    assert exit_code == 0
-    assert "无法基于当前知识库回答" in output
-
-
-def test_cli_ask_supports_json_output(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "expert_digest.cli.answer_question",
-        lambda **_kwargs: StructuredAnswer(
-            answer="可回答",
-            evidence=[
-                AnswerEvidence(
-                    chunk_id="chunk-json",
-                    score=0.99,
-                    title="泡泡玛特复盘",
-                    author="黄彦臻",
-                    snippet="泡泡玛特的核心在于IP运营与预期管理。",
-                    url="https://example.com/p1",
-                )
-            ],
-            recommended_original=["泡泡玛特复盘 - https://example.com/p1"],
-            uncertainty="低",
-            refused=False,
-        ),
-    )
-
-    exit_code = main(
-        [
-            "ask",
-            "泡泡玛特的核心能力是什么？",
-            "--top-k",
-            "1",
-            "--format",
-            "json",
-        ]
-    )
-    payload = json.loads(capsys.readouterr().out)
-
-    assert exit_code == 0
-    assert payload["refused"] is False
-    assert payload["evidence"][0]["chunk_id"] == "chunk-json"
-    assert payload["recommended_original"]
-
-
-def test_cli_ask_refuses_when_average_score_below_threshold(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "expert_digest.cli.answer_question",
-        lambda **_kwargs: StructuredAnswer(
-            answer="抱歉，我无法基于当前知识库回答这个问题。",
-            evidence=[],
-            recommended_original=[],
-            uncertainty="平均得分不足。",
-            refused=True,
-        ),
-    )
-
-    exit_code = main(
-        [
-            "ask",
-            "泡泡玛特的核心能力是什么？",
-            "--top-k",
-            "2",
-            "--min-top-score",
-            "0.8",
-            "--min-avg-score",
-            "0.6",
-            "--format",
-            "json",
-        ]
-    )
-    payload = json.loads(capsys.readouterr().out)
-
-    assert exit_code == 0
-    assert payload["refused"] is True
-
-
 def test_cli_generate_handbook_writes_output(monkeypatch, capsys, tmp_path):
     class _FakePipeline:
         def invoke(self, state):
@@ -364,6 +216,7 @@ def test_cli_generate_handbook_returns_error_on_pipeline_failure(
             raise RuntimeError("pipeline error: no documents")
 
     monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _BrokenPipeline())
+    monkeypatch.setattr("expert_digest.cli._load_pipeline_env", lambda: None)
 
     exit_code = main(["generate-handbook"])
     output = capsys.readouterr().out
@@ -372,83 +225,22 @@ def test_cli_generate_handbook_returns_error_on_pipeline_failure(
     assert "Failed to generate handbook" in output
 
 
-def test_cli_generate_handbook_json_output(monkeypatch, capsys, tmp_path):
-    class _FakePipeline:
-        def invoke(self, state):
-            return {"handbook_markdown": "# Handbook\n\nRich content.\n"}
-
-    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _FakePipeline())
-
-    output_path = tmp_path / "handbook.md"
-    exit_code = main(
-        [
-            "generate-handbook",
-            "--format", "json",
-            "--output", str(output_path),
-        ]
-    )
-    payload = json.loads(capsys.readouterr().out)
-
-    assert exit_code == 0
-    assert payload["status"] == "generated"
-    assert payload["handbook_length"] > 0
-
-
-def test_cli_generate_handbook_json_output_empty(monkeypatch, capsys, tmp_path):
+def test_cli_generate_handbook_output_empty(monkeypatch, capsys, tmp_path):
     class _FakePipeline:
         def invoke(self, state):
             return {"handbook_markdown": ""}
 
     monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _FakePipeline())
+    monkeypatch.setattr("expert_digest.cli._load_pipeline_env", lambda: None)
 
     output_path = tmp_path / "handbook.md"
     exit_code = main(
-        [
-            "generate-handbook",
-            "--format", "json",
-            "--output", str(output_path),
-            "--author", "TestAuthor",
-        ]
-    )
-    payload = json.loads(capsys.readouterr().out)
-
-    assert exit_code == 0
-    assert payload["status"] == "empty_handbook"
-
-
-def test_cli_generate_handbook_fails_quality_gate(monkeypatch, capsys):
-    monkeypatch.setattr(
-        "expert_digest.cli.evaluate_wiki",
-        lambda **_kwargs: type(
-            "Report",
-            (),
-            {"traceability_ratio": 1.0, "coverage_ratio": 1.0},
-        )(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.lint_wiki",
-        lambda **_kwargs: type("Lint", (), {"issue_count": 99})(),
-    )
-    monkeypatch.setattr(
-        "expert_digest.cli.compile_pipeline",
-        lambda: (_ for _ in ()).throw(AssertionError("should not build")),
-    )
-
-    exit_code = main(
-        [
-            "generate-handbook",
-            "--wiki-root-for-quality",
-            "data/wiki/huang_pass1b",
-            "--expected-source-count-for-quality",
-            "824",
-            "--max-lint-issues-for-quality",
-            "20",
-        ]
+        ["generate-handbook", "--output", str(output_path)]
     )
     output = capsys.readouterr().out
 
-    assert exit_code == 1
-    assert "Failed quality gate" in output
+    assert exit_code == 0
+    assert "handbook output is empty" in output
 
 
 def test_print_json_safely_falls_back_when_terminal_encoding_rejects_unicode(

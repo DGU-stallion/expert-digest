@@ -29,7 +29,6 @@ from expert_digest.pipeline.state import (
     make_initial_state,
 )
 
-
 # ── Thinker (mental model extraction) ────────────────────────────────────
 
 

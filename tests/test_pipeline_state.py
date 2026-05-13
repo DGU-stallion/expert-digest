@@ -22,6 +22,7 @@ def test_make_initial_state_has_all_keys() -> None:
     assert state["wiki_root"] == "/tmp/wiki"
     assert state["db_path"] == "/tmp/db"
     assert state["documents"] == []
+    assert state["wiki_pages"] == []
     assert state["themes"] == []
     assert state["concepts"] == []
     assert state["topic_clusters"] == []
@@ -110,6 +111,7 @@ def test_state_dict_compliance() -> None:
         "wiki_root": "/wiki",
         "author": "author",
         "documents": [{"id": "d1", "title": "test"}],
+        "wiki_pages": [],
         "themes": [Theme(label="t", summary="s")],
         "concepts": ["c1"],
         "thinking_patterns": ["p1"],

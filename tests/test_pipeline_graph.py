@@ -39,7 +39,7 @@ class TestMainGraph:
         state = make_initial_state(author="test")
         result = pipeline.invoke(state)
         expected_keys = {
-            "db_path", "wiki_root", "author", "documents",
+            "db_path", "wiki_root", "author", "documents", "wiki_pages",
             "themes", "concepts", "topic_clusters",
             "thinking_patterns", "expression_dna", "intellectual_genealogy",
             "key_decisions", "chapter_plan", "chapters", "review_results",
@@ -82,13 +82,13 @@ class TestSkillSubgraph:
 class TestCLIPipelineCommands:
     """Tests for the CLI pipeline entry points."""
 
-    def test_generate_handbook_pipeline_help(self):
+    def test_generate_handbook_help(self):
         import subprocess
         import sys
 
         code = (
             "from expert_digest.cli import main; "
-            "main(['generate-handbook-pipeline', '--help'])"
+            "main(['generate-handbook', '--help'])"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],
@@ -97,13 +97,13 @@ class TestCLIPipelineCommands:
         assert result.returncode == 0
         assert "--author" in (result.stdout + result.stderr)
 
-    def test_generate_skill_pipeline_help(self):
+    def test_generate_skill_help(self):
         import subprocess
         import sys
 
         code = (
             "from expert_digest.cli import main; "
-            "main(['generate-skill-pipeline', '--help'])"
+            "main(['generate-skill', '--help'])"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],
