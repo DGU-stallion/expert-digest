@@ -1,140 +1,125 @@
-from expert_digest.domain.models import Document
-from expert_digest.processing.evidence_builder import build_document_evidence
-from expert_digest.wiki.analyzer import analyze_document_evidence
+"""Tests for LLM-based wiki analyzer."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+
+from expert_digest.wiki.analyzer import analyze_document
 
 
-def test_analyze_document_evidence_extracts_claims_concepts_and_topics():
-    document = Document.create(
-        author="黄彦臻",
-        title="泡泡玛特复盘",
-        content=(
-            "泡泡玛特的核心能力是 IP 运营。"
-            "因为它能持续制造角色资产，所以估值不能只看玩具销售。"
-        ),
-        source="sample",
-        url="https://example.com/popmart",
-    )
-    evidence = build_document_evidence(document, span_max_chars=40)
-
-    analysis = analyze_document_evidence(evidence)
-
-    assert analysis.source_id == document.id
-    assert analysis.source_title == "泡泡玛特复盘"
-    assert "泡泡玛特" in analysis.concepts
-    assert "IP" in analysis.concepts or "运营" in analysis.concepts
-    assert analysis.key_claims
-    assert analysis.evidence_span_ids
-    assert analysis.topics
+@pytest.fixture
+def mock_llm():
+    fake_raw = """\
+{
+  "summary": "分析了泡泡玛特的IP运营能力。",
+  "key_claims": [
+    "泡泡玛特的核心能力是IP运营。",
+    "估值不能只看玩具销售。"
+  ],
+  "concepts": ["泡泡玛特", "IP运营", "角色资产", "估值模型"],
+  "topics": ["潮玩行业", "IP经济"]
+}"""
+    with patch(
+        "expert_digest.wiki.analyzer.require_fast_client"
+    ) as mock_factory:
+        mock_client = mock_factory.return_value
+        mock_client.generate.return_value = fake_raw
+        yield mock_client
 
 
-def test_analyze_document_evidence_marks_low_confidence_when_no_spans():
-    document = Document.create(
-        author="黄彦臻",
-        title="空文章",
-        content="",
-        source="sample",
-    )
-    evidence = build_document_evidence(document)
+def test_analyze_document_returns_source_analysis(mock_llm):
+    doc = {
+        "id": "doc1",
+        "title": "泡泡玛特复盘",
+        "content": "泡泡玛特的核心能力是 IP 运营。",
+        "author": "黄彦臻",
+        "url": "https://example.com/popmart",
+    }
+    result = analyze_document(doc)
 
-    analysis = analyze_document_evidence(evidence)
-
-    assert analysis.confidence == "low"
-    assert analysis.key_claims == []
-
-
-def test_analyze_document_evidence_filters_question_template_noise():
-    document = Document.create(
-        author="黄彦臻",
-        title="10 月 9 日 A 股大幅回调，如何看待今日行情？",
-        content=(
-            "全市场逾 200 只个股下跌。"
-            "发生了什么？"
-            "请问后续怎么走？"
-        ),
-        source="sample",
-    )
-    evidence = build_document_evidence(document, span_max_chars=30)
-
-    analysis = analyze_document_evidence(evidence)
-
-    joined_concepts = " ".join(analysis.concepts)
-    joined_topics = " ".join(analysis.topics)
-    assert "如何看待今日行情" not in joined_concepts
-    assert "发生了什么" not in joined_concepts
-    assert "请问后续怎么走" not in joined_concepts
-    assert "如何看待今日行情" not in joined_topics
-    assert "发生了什么" not in joined_topics
-    assert "请问后续怎么走" not in joined_topics
+    assert result.source_id == "doc1"
+    assert result.source_title == "泡泡玛特复盘"
+    assert "IP运营" in result.concepts
+    assert len(result.key_claims) == 2
+    assert result.topics == ["潮玩行业", "IP经济"]
+    assert result.confidence == "high"
+    assert result.evidence_span_ids == []
 
 
-def test_analyze_document_evidence_filters_date_fragment_noise():
-    document = Document.create(
-        author="黄彦臻",
-        title="12 月 4 日午间，比特币价格大跳水，发生了什么？",
-        content="比特币价格在一小时内快速回撤。",
-        source="sample",
-    )
-    evidence = build_document_evidence(document, span_max_chars=30)
+def test_analyze_document_empty_content():
+    doc = {
+        "id": "empty",
+        "title": "空文章",
+        "content": "",
+        "author": "test",
+        "url": None,
+    }
+    result = analyze_document(doc)
 
-    analysis = analyze_document_evidence(evidence)
-
-    assert "日午间" not in analysis.concepts
-    assert "发生了什么" not in analysis.concepts
-
-
-def test_analyze_document_evidence_filters_market_broadcast_noise():
-    document = Document.create(
-        author="黄彦臻",
-        title="10 月 9 日午间全市场逾 500 只个股涨停，发生了什么？",
-        content=(
-            "午间盘中波动放大，全市场逾 500 只个股涨停。"
-            "请问后续会怎么走？"
-        ),
-        source="sample",
-    )
-    evidence = build_document_evidence(document, span_max_chars=30)
-
-    analysis = analyze_document_evidence(evidence)
-
-    joined_concepts = " ".join(analysis.concepts)
-    joined_topics = " ".join(analysis.topics)
-    assert "全市场逾" not in joined_concepts
-    assert "只个股涨停" not in joined_concepts
-    assert "日午间" not in joined_concepts
-    assert "全市场逾" not in joined_topics
-    assert "只个股涨停" not in joined_topics
+    assert result.confidence == "low"
+    assert result.key_claims == []
+    assert result.concepts == []
 
 
-def test_analyze_document_evidence_applies_stricter_output_limits():
-    document = Document.create(
-        author="黄彦臻",
-        title="泡泡玛特海外扩张复盘",
-        content=(
-            "泡泡玛特的核心能力是 IP 运营。"
-            "潮玩行业的增长依赖品牌势能、渠道效率、组织协同和内容供给。"
-            "公司在海外市场通过门店、联名和社群运营提升复购。"
-        ),
-        source="sample",
-    )
-    evidence = build_document_evidence(document, span_max_chars=40)
+def test_analyze_document_truncates_long_content():
+    long = "word " * 4000
+    doc = {
+        "id": "long",
+        "title": "长文",
+        "content": long,
+        "author": "test",
+        "url": None,
+    }
+    with patch(
+        "expert_digest.wiki.analyzer.require_fast_client"
+    ) as mock_factory:
+        mock_client = mock_factory.return_value
+        mock_client.generate.return_value = '{"summary":"ok","key_claims":[],"concepts":[],"topics":[]}'
+        result = analyze_document(doc)
 
-    analysis = analyze_document_evidence(evidence)
-
-    assert len(analysis.concepts) <= 8
-    assert len(analysis.topics) <= 3
-    assert "泡泡玛特" in analysis.concepts
+    sent_text = mock_client.generate.call_args[1]["user_prompt"]
+    assert len(sent_text) < 7000
 
 
-def test_analyze_document_evidence_rejects_two_letter_lowercase_noise():
-    document = Document.create(
-        author="黄彦臻",
-        title="BD BP 交易复盘",
-        content="BD BP 是论坛里的噪声缩写，不应成为稳定概念。",
-        source="sample",
-    )
-    evidence = build_document_evidence(document, span_max_chars=30)
+def test_analyze_document_handles_malformed_json():
+    doc = {
+        "id": "bad",
+        "title": "坏JSON",
+        "content": "一些内容。",
+        "author": "test",
+        "url": None,
+    }
+    with patch(
+        "expert_digest.wiki.analyzer.require_fast_client"
+    ) as mock_factory:
+        mock_client = mock_factory.return_value
+        mock_client.generate.return_value = "not json at all"
+        result = analyze_document(doc)
 
-    analysis = analyze_document_evidence(evidence)
+    assert result.confidence == "low"
+    assert result.key_claims == []
+    assert result.concepts == []
+    assert result.topics == []
 
-    assert "bd" not in [item.lower() for item in analysis.concepts]
-    assert "bp" not in [item.lower() for item in analysis.concepts]
+
+def test_analyze_document_strips_markdown_fences():
+    doc = {
+        "id": "md",
+        "title": "带fence的",
+        "content": "内容。",
+        "author": "test",
+        "url": None,
+    }
+    with patch(
+        "expert_digest.wiki.analyzer.require_fast_client"
+    ) as mock_factory:
+        mock_client = mock_factory.return_value
+        mock_client.generate.return_value = """```json
+{"summary":"s","key_claims":["c1"],"concepts":["x"],"topics":["y"]}
+```"""
+        result = analyze_document(doc)
+
+    assert result.concepts == ["x"]
+    assert result.key_claims == ["c1"]

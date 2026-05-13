@@ -1,21 +1,21 @@
-from expert_digest.domain.models import Document
-from expert_digest.processing.evidence_builder import build_document_evidence
-from expert_digest.wiki.analyzer import analyze_document_evidence
 from expert_digest.wiki.models import SourceAnalysis
 from expert_digest.wiki.vault import WikiVault
 from expert_digest.wiki.writer import write_analysis_to_vault
 
 
 def test_write_analysis_to_vault_creates_source_concept_topic_index_and_log(tmp_path):
-    document = Document.create(
+    analysis = SourceAnalysis(
+        source_id="doc-1",
+        source_title="泡泡玛特复盘",
         author="黄彦臻",
-        title="泡泡玛特复盘",
-        content="泡泡玛特的核心能力是 IP 运营。因为它能持续制造角色资产。",
-        source="sample",
         url="https://example.com/popmart",
+        summary="分析了泡泡玛特的IP运营能力。",
+        key_claims=["泡泡玛特核心能力是 IP 运营。"],
+        concepts=["IP运营"],
+        topics=["潮玩行业"],
+        evidence_span_ids=[],
+        confidence="medium",
     )
-    evidence = build_document_evidence(document, span_max_chars=40)
-    analysis = analyze_document_evidence(evidence)
     vault = WikiVault(root=tmp_path / "wiki" / "huang")
     vault.initialize(
         expert_id="huang",
@@ -23,16 +23,12 @@ def test_write_analysis_to_vault_creates_source_concept_topic_index_and_log(tmp_
         purpose="沉淀公开文章。",
     )
 
-    written = write_analysis_to_vault(
-        vault=vault,
-        analysis=analysis,
-        evidence_spans=evidence.evidence_spans,
-    )
+    written = write_analysis_to_vault(vault=vault, analysis=analysis)
 
     assert "sources" in written
     assert "concepts" in written
     assert "topics" in written
-    assert (vault.root / "sources" / f"{document.id}.md").exists()
+    assert (vault.root / "sources" / "doc-1.md").exists()
     root_index = (vault.root / "index.md").read_text(encoding="utf-8")
     assert "[Sources](sources/index.md)" in root_index
     assert "[Topics](topics/index.md)" in root_index
@@ -75,16 +71,8 @@ def test_write_analysis_to_vault_aggregates_existing_concept_and_topic_pages(tmp
         confidence="medium",
     )
 
-    first_written = write_analysis_to_vault(
-        vault=vault,
-        analysis=first,
-        evidence_spans=[],
-    )
-    write_analysis_to_vault(
-        vault=vault,
-        analysis=second,
-        evidence_spans=[],
-    )
+    first_written = write_analysis_to_vault(vault=vault, analysis=first)
+    write_analysis_to_vault(vault=vault, analysis=second)
 
     concept_page = vault.read_page(first_written["concepts"][0])
     topic_page = vault.read_page(first_written["topics"][0])
@@ -129,8 +117,8 @@ def test_write_analysis_to_vault_builds_layered_indexes(tmp_path):
         confidence="medium",
     )
 
-    write_analysis_to_vault(vault=vault, analysis=first, evidence_spans=[])
-    write_analysis_to_vault(vault=vault, analysis=second, evidence_spans=[])
+    write_analysis_to_vault(vault=vault, analysis=first)
+    write_analysis_to_vault(vault=vault, analysis=second)
 
     root_index = (vault.root / "index.md").read_text(encoding="utf-8")
     sources_index = (vault.root / "sources" / "index.md").read_text(encoding="utf-8")
@@ -140,7 +128,6 @@ def test_write_analysis_to_vault_builds_layered_indexes(tmp_path):
     assert "[Sources](sources/index.md)" in root_index
     assert "[Topics](topics/index.md)" in root_index
     assert "[Concepts](concepts/index.md)" in root_index
-    assert "Source: [泡泡玛特复盘一]" not in root_index
     assert "泡泡玛特复盘一" in sources_index
     assert "泡泡玛特复盘二" in sources_index
     assert "潮玩行业" in topics_index

@@ -1,11 +1,22 @@
 import json
+from unittest.mock import patch
 
 from expert_digest.cli import main
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
 from expert_digest.storage.sqlite_store import save_documents
 
+FAKE_ANALYSIS_JSON = json.dumps(
+    {
+        "summary": "分析了泡泡玛特的IP运营能力。",
+        "key_claims": ["泡泡玛特的核心能力是IP运营。"],
+        "concepts": ["IP运营", "泡泡玛特"],
+        "topics": ["潮玩行业"],
+    },
+    ensure_ascii=False,
+)
 
-def test_cli_build_evidence_and_build_wiki(tmp_path, capsys):
+
+def test_cli_build_wiki(tmp_path, capsys):
     db_path = tmp_path / "expert.sqlite3"
     wiki_root = tmp_path / "wiki" / "huang"
     jsonl_path = tmp_path / "articles.jsonl"
@@ -25,25 +36,28 @@ def test_cli_build_evidence_and_build_wiki(tmp_path, capsys):
     )
     save_documents(db_path, load_jsonl_documents(jsonl_path))
 
-    assert main(["build-evidence", "--db", str(db_path)]) == 0
-    assert main(
-        [
-            "build-wiki",
-            "--db",
-            str(db_path),
-            "--wiki-root",
-            str(wiki_root),
-            "--expert-id",
-            "huang",
-            "--expert-name",
-            "黄彦臻",
-            "--purpose",
-            "沉淀公开文章。",
-        ]
-    ) == 0
+    with patch(
+        "expert_digest.wiki.analyzer.require_fast_client"
+    ) as mock_factory:
+        mock_client = mock_factory.return_value
+        mock_client.generate.return_value = FAKE_ANALYSIS_JSON
+        assert main(
+            [
+                "build-wiki",
+                "--db",
+                str(db_path),
+                "--wiki-root",
+                str(wiki_root),
+                "--expert-id",
+                "huang",
+                "--expert-name",
+                "黄彦臻",
+                "--purpose",
+                "沉淀公开文章。",
+            ]
+        ) == 0
 
     output = capsys.readouterr().out
-    assert "Built evidence" in output
     assert "Built wiki" in output
     assert (wiki_root / "sources").is_dir()
     assert list((wiki_root / "sources").glob("*.md"))
@@ -68,22 +82,26 @@ def test_cli_search_wiki_outputs_hits(tmp_path, capsys):
     )
     save_documents(db_path, load_jsonl_documents(jsonl_path))
 
-    main(["build-evidence", "--db", str(db_path)])
-    main(
-        [
-            "build-wiki",
-            "--db",
-            str(db_path),
-            "--wiki-root",
-            str(wiki_root),
-            "--expert-id",
-            "huang",
-            "--expert-name",
-            "黄彦臻",
-            "--purpose",
-            "沉淀公开文章。",
-        ]
-    )
+    with patch(
+        "expert_digest.wiki.analyzer.require_fast_client"
+    ) as mock_factory:
+        mock_client = mock_factory.return_value
+        mock_client.generate.return_value = FAKE_ANALYSIS_JSON
+        main(
+            [
+                "build-wiki",
+                "--db",
+                str(db_path),
+                "--wiki-root",
+                str(wiki_root),
+                "--expert-id",
+                "huang",
+                "--expert-name",
+                "黄彦臻",
+                "--purpose",
+                "沉淀公开文章。",
+            ]
+        )
     assert main(["search-wiki", "泡泡玛特", "--wiki-root", str(wiki_root)]) == 0
 
     output = capsys.readouterr().out
@@ -109,22 +127,26 @@ def test_cli_lint_wiki_outputs_report(tmp_path, capsys):
     )
     save_documents(db_path, load_jsonl_documents(jsonl_path))
 
-    main(["build-evidence", "--db", str(db_path)])
-    main(
-        [
-            "build-wiki",
-            "--db",
-            str(db_path),
-            "--wiki-root",
-            str(wiki_root),
-            "--expert-id",
-            "huang",
-            "--expert-name",
-            "黄彦臻",
-            "--purpose",
-            "沉淀公开文章。",
-        ]
-    )
+    with patch(
+        "expert_digest.wiki.analyzer.require_fast_client"
+    ) as mock_factory:
+        mock_client = mock_factory.return_value
+        mock_client.generate.return_value = FAKE_ANALYSIS_JSON
+        main(
+            [
+                "build-wiki",
+                "--db",
+                str(db_path),
+                "--wiki-root",
+                str(wiki_root),
+                "--expert-id",
+                "huang",
+                "--expert-name",
+                "黄彦臻",
+                "--purpose",
+                "沉淀公开文章。",
+            ]
+        )
     assert main(["lint-wiki", "--wiki-root", str(wiki_root)]) == 0
 
     output = capsys.readouterr().out

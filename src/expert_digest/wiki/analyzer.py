@@ -1,222 +1,113 @@
-"""Deterministic source analysis baseline for wiki ingest."""
+"""LLM-driven source analysis for wiki ingest.
+
+Replaces the old rule-based analyzer with direct LLM extraction
+of summary, key claims, concepts, and topics from full documents.
+"""
 
 from __future__ import annotations
 
+import json
 import re
-from collections import Counter
+from typing import Any
 
-from expert_digest.processing.evidence_builder import DocumentEvidence
+from expert_digest.pipeline.llm import require_fast_client
 from expert_digest.wiki.models import SourceAnalysis
 
-_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+-]{1,}|[\u4e00-\u9fff]{2,}")
-_CHINESE_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
-_CONCEPT_LIMIT = 8
-_TOPIC_LIMIT = 3
-_STOPWORDS = {
-    "这个",
-    "那个",
-    "因为",
-    "所以",
-    "但是",
-    "如果",
-    "那么",
-    "可以",
-    "不是",
-    "而是",
-    "他们",
-    "我们",
-    "今日",
-    "后续",
-    "目前",
-    "市场",
-}
-_TITLE_SUFFIXES = ("复盘", "分析", "研究", "观察", "案例", "笔记", "总结", "报告")
-_QUESTION_PATTERNS = (
-    "如何看待",
-    "发生了什么",
-    "是什么意思",
-    "为什么",
-    "请问",
-    "怎么走",
-)
-_NOISE_SUBSTRINGS = (
-    "全市场逾",
-    "只个股涨停",
-    "个股涨停",
-    "日午间",
-    "午间盘中",
-    "发生了什么",
-    "请问后续",
-)
-_SHORT_KEEP = {"AI", "IP", "A股", "美股", "港股"}
+_ANALYZER_SYSTEM_PROMPT = """\
+你是一位专业的内容分析师。你的任务是从一篇文章中提取结构化信息。
+
+请提取以下内容：
+1. **摘要**（2-3句话）：概括文章的核心内容
+2. **关键论断**（3-5条）：作者的核心观点或判断，附上原文中的直接证据片段
+3. **概念**（3-8个）：文章中反复出现或至关重要的专业术语/概念
+4. **主题**（2-4个）：文章所属的主题领域
+
+必须只输出 JSON 对象，不要输出任何多余文本。JSON 格式：
+{
+  "summary": "文章摘要",
+  "key_claims": ["论断1（证据：原文片段）", "论断2（证据：原文片段）"],
+  "concepts": ["概念1", "概念2"],
+  "topics": ["主题1", "主题2"]
+}"""
 
 
-def analyze_document_evidence(evidence: DocumentEvidence) -> SourceAnalysis:
-    spans = evidence.evidence_spans
-    claims = [_normalize(span.text) for span in spans[:5] if _normalize(span.text)]
-    concepts = _extract_concepts(
-        evidence.document.title + "\n" + evidence.document.content
+def _build_prompt(title: str, content: str) -> str:
+    max_chars = 6000
+    if len(content) > max_chars:
+        content = content[:max_chars] + "\n\n...（文章过长，已截断）"
+    return f"## 标题\n{title}\n\n## 正文\n{content}"
+
+
+def analyze_document(document: dict[str, Any]) -> SourceAnalysis:
+    """Extract structured info from a full document via LLM.
+
+    Args:
+        document: dict with keys ``id``, ``title``, ``content``, ``author``, ``url``.
+
+    Returns:
+        A ``SourceAnalysis`` dataclass instance.
+    """
+    doc_id = document.get("id", "")
+    title = document.get("title", "").strip()
+    content = document.get("content", "").strip()
+    author = document.get("author", "未知")
+    url = document.get("url")
+
+    if not content:
+        return SourceAnalysis(
+            source_id=doc_id,
+            source_title=title or "未命名",
+            author=author,
+            url=url,
+            summary="",
+            key_claims=[],
+            concepts=[],
+            topics=[],
+            evidence_span_ids=[],
+            confidence="low",
+        )
+
+    llm = require_fast_client()
+    user_prompt = _build_prompt(title, content)
+    raw = llm.generate(
+        system_prompt=_ANALYZER_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
     )
-    topics = _extract_topics(
-        title=evidence.document.title,
-        concepts=concepts,
-    )
-    summary = _build_summary(
-        title=evidence.document.title,
-        claims=claims,
-    )
+
+    parsed = _parse_json(raw)
+    summary = str(parsed.get("summary", "")).strip()
+    key_claims = _ensure_str_list(parsed.get("key_claims", []))
+    concepts = _ensure_str_list(parsed.get("concepts", []))
+    topics = _ensure_str_list(parsed.get("topics", []))
+    confidence = "high" if key_claims else "low"
+
     return SourceAnalysis(
-        source_id=evidence.document.id,
-        source_title=evidence.document.title,
-        author=evidence.document.author,
-        url=evidence.document.url,
-        summary=summary,
-        key_claims=claims,
+        source_id=doc_id,
+        source_title=title or "未命名",
+        author=author,
+        url=url,
+        summary=summary or f"《{title}》的核心内容摘要。",
+        key_claims=key_claims,
         concepts=concepts,
         topics=topics,
-        evidence_span_ids=[span.id for span in spans[:8]],
-        confidence="medium" if claims else "low",
+        evidence_span_ids=[],
+        confidence=confidence,
     )
 
 
-def _extract_concepts(text: str, *, limit: int = _CONCEPT_LIMIT) -> list[str]:
-    counts: Counter[str] = Counter()
-    title, _, body = text.partition("\n")
-
-    for token in _title_candidates(title):
-        counts[token] += 3
-
-    for token in _possessive_terms(body):
-        counts[token] += 2
-
-    for token in _TOKEN_RE.findall(text):
-        normalized = token.strip()
-        if _is_candidate(normalized):
-            counts[normalized] += 1
-
-    selected: list[str] = []
-    for token, score in counts.most_common():
-        if _passes_concept_score(token=token, score=score):
-            selected.append(token)
-        if len(selected) >= limit:
-            break
-    return selected
+def _parse_json(raw: str) -> dict:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
-def _extract_topics(
-    *,
-    title: str,
-    concepts: list[str],
-    limit: int = _TOPIC_LIMIT,
-) -> list[str]:
-    candidates = []
-    for token in re.split(r"[\s:：,，。;；、\-_/|]+", title):
-        stripped = token.strip()
-        if _is_topic_candidate(stripped):
-            candidates.append(stripped)
-    candidates.extend([token for token in concepts if _is_topic_candidate(token)])
-    return list(dict.fromkeys(candidates))[:limit] or ["未分类主题"]
-
-
-def _build_summary(*, title: str, claims: list[str]) -> str:
-    if not claims:
-        return f"《{title}》暂无可稳定抽取的核心判断。"
-    return f"《{title}》的核心线索：{claims[0]}"
-
-
-def _normalize(text: str) -> str:
-    return " ".join(text.split())
-
-
-def _title_candidates(title: str) -> list[str]:
-    candidates: list[str] = []
-    for token in _TOKEN_RE.findall(title):
-        token = token.strip()
-        stem_added = False
-        for suffix in _TITLE_SUFFIXES:
-            if token.endswith(suffix) and len(token) > len(suffix) + 1:
-                stem = token.removesuffix(suffix)
-                if _is_candidate(stem):
-                    candidates.append(stem)
-                    stem_added = True
-        if stem_added:
-            continue
-        if _is_candidate(token):
-            candidates.append(token)
-    return _dedupe_keep_order(candidates)
-
-
-def _possessive_terms(text: str) -> list[str]:
-    terms: list[str] = []
-    for match in re.finditer(
-        r"([A-Za-z][A-Za-z0-9_+-]{1,}|[\u4e00-\u9fff]{2,})的", text
-    ):
-        token = match.group(1).strip()
-        if _is_candidate(token):
-            terms.append(token)
-    return terms
-
-
-def _is_candidate(token: str) -> bool:
-    normalized = token.strip()
-    if not normalized:
-        return False
-    if normalized in _STOPWORDS:
-        return False
-    if any(pattern in normalized for pattern in _NOISE_SUBSTRINGS):
-        return False
-    if any(pattern in normalized for pattern in _QUESTION_PATTERNS):
-        return False
-    if any(char.isdigit() for char in normalized):
-        return False
-    if normalized.endswith(("吗", "呢", "么", "是", "在", "了")):
-        return False
-    if "个股" in normalized or "涨停" in normalized:
-        return False
-    if normalized.startswith(("日", "月")) and len(normalized) <= 3:
-        return False
-    if len(normalized) > 16:
-        return False
-    if len(normalized) <= 2:
-        if normalized in _SHORT_KEEP:
-            return True
-        return False
-    if re.fullmatch(r"[A-Z]{3,4}", normalized):
-        return True
-    if _is_short_chinese_token(normalized) and normalized not in _SHORT_KEEP:
-        return True
-    if len(normalized) < 2:
-        return False
-    return bool(_TOKEN_RE.fullmatch(normalized) or _CHINESE_RE.fullmatch(normalized))
-
-
-def _passes_concept_score(*, token: str, score: int) -> bool:
-    if token in _SHORT_KEEP:
-        return score >= 1
-    if _is_short_chinese_token(token) and token not in _SHORT_KEEP:
-        return score >= 3
-    return score >= 2
-
-
-def _is_topic_candidate(token: str) -> bool:
-    if not _is_candidate(token):
-        return False
-    if _is_short_chinese_token(token) and token not in _SHORT_KEEP:
-        return False
-    return True
-
-
-def _is_short_chinese_token(token: str) -> bool:
-    return len(token) <= 3 and bool(re.fullmatch(r"[\u4e00-\u9fff]{2,3}", token))
-
-
-def _dedupe_keep_order(values: list[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        normalized = value.strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        result.append(normalized)
-    return result
+def _ensure_str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if isinstance(item, str) and item.strip()]

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from expert_digest.domain.models import EvidenceSpan
 from expert_digest.wiki.models import SourceAnalysis, SourceRef, WikiPage
 from expert_digest.wiki.vault import WikiVault
 
@@ -26,7 +25,6 @@ def write_analysis_to_vault(
     *,
     vault: WikiVault,
     analysis: SourceAnalysis,
-    evidence_spans: list[EvidenceSpan],
 ) -> dict[str, list[str]]:
     source_path = f"sources/{analysis.source_id}.md"
     source_ref = SourceRef(
@@ -35,11 +33,7 @@ def write_analysis_to_vault(
         url=analysis.url,
         evidence_span_ids=analysis.evidence_span_ids,
     )
-    evidence_lookup = {span.id: span for span in evidence_spans}
-    source_body = _render_source_body(
-        analysis=analysis,
-        evidence_lookup=evidence_lookup,
-    )
+    source_body = _render_source_body(analysis=analysis)
     vault.write_page(
         WikiPage(
             path=source_path,
@@ -108,20 +102,13 @@ def write_analysis_to_vault(
     }
 
 
-def _render_source_body(
-    *,
-    analysis: SourceAnalysis,
-    evidence_lookup: dict[str, EvidenceSpan],
-) -> str:
+def _render_source_body(*, analysis: SourceAnalysis) -> str:
     lines = [f"# {analysis.source_title}", "", "## 摘要", "", analysis.summary, ""]
-    lines.extend(["## 核心判断", ""])
-    for claim in analysis.key_claims:
-        lines.append(f"- {claim}")
-    lines.extend(["", "## 证据片段", ""])
-    for span_id in analysis.evidence_span_ids:
-        span = evidence_lookup.get(span_id)
-        if span is not None:
-            lines.append(f"- `{span.id}` {span.text}")
+    if analysis.key_claims:
+        lines.append("## 核心判断")
+        for claim in analysis.key_claims:
+            lines.append(f"- {claim}")
+        lines.append("")
     return "\n".join(lines).rstrip()
 
 

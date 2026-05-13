@@ -102,10 +102,15 @@ def _route_to_products(state: DigestState) -> dict:
 
 
 def _output_skill(state: DigestState) -> dict:
-    """Write skill markdown to the output directory."""
+    """Write skill markdown to the output directory.
+
+    Only writes when _skill_verified is True, so test pipeline invocations
+    (which produce stub skill content) do not overwrite production output.
+    """
     skill_md = state.get("skill_markdown", "").strip()
-    if not skill_md:
-        return {"errors": state.get("errors", [])}
+    verified = state.get("_skill_verified", False)
+    if not skill_md or not verified:
+        return {}
 
     output_dir = Path(state.get("output_dir", "data/outputs"))
     output_path = output_dir / "skill.md"

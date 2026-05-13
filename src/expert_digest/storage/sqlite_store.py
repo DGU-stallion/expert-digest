@@ -11,8 +11,6 @@ from expert_digest.domain.models import (
     Chunk,
     ChunkEmbedding,
     Document,
-    EvidenceSpan,
-    ParentSection,
 )
 
 DEFAULT_DATABASE_PATH = Path("data/processed/expert_digest.sqlite3")
@@ -133,92 +131,6 @@ def save_chunk_embeddings(
     return len(submitted)
 
 
-def save_parent_sections(
-    db_path: str | Path,
-    sections: Iterable[ParentSection],
-) -> int:
-    """Save parent sections and return the number of submitted sections."""
-    database_path = Path(db_path)
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    submitted = list(sections)
-
-    with _connect(database_path) as connection:
-        _ensure_schema(connection)
-        connection.executemany(
-            """
-            INSERT OR REPLACE INTO parent_sections (
-                id,
-                document_id,
-                title,
-                text,
-                section_index,
-                start_char,
-                end_char,
-                imported_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            """,
-            [
-                (
-                    section.id,
-                    section.document_id,
-                    section.title,
-                    section.text,
-                    section.section_index,
-                    section.start_char,
-                    section.end_char,
-                )
-                for section in submitted
-            ],
-        )
-
-    return len(submitted)
-
-
-def save_evidence_spans(
-    db_path: str | Path,
-    spans: Iterable[EvidenceSpan],
-) -> int:
-    """Save evidence spans and return the number of submitted spans."""
-    database_path = Path(db_path)
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    submitted = list(spans)
-
-    with _connect(database_path) as connection:
-        _ensure_schema(connection)
-        connection.executemany(
-            """
-            INSERT OR REPLACE INTO evidence_spans (
-                id,
-                document_id,
-                parent_section_id,
-                chunk_id,
-                text,
-                span_index,
-                start_char,
-                end_char,
-                imported_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            """,
-            [
-                (
-                    span.id,
-                    span.document_id,
-                    span.parent_section_id,
-                    span.chunk_id,
-                    span.text,
-                    span.span_index,
-                    span.start_char,
-                    span.end_char,
-                )
-                for span in submitted
-            ],
-        )
-
-    return len(submitted)
-
-
 def list_documents(db_path: str | Path) -> list[Document]:
     """Return every stored document in stable title order."""
     database_path = Path(db_path)
@@ -297,43 +209,6 @@ def list_chunks_for_document(db_path: str | Path, document_id: str) -> list[Chun
     return [_chunk_from_row(row) for row in rows]
 
 
-def list_parent_sections(db_path: str | Path) -> list[ParentSection]:
-    """Return every stored parent section in stable document/section order."""
-    database_path = Path(db_path)
-    if not database_path.exists():
-        return []
-
-    with _connect(database_path) as connection:
-        _ensure_schema(connection)
-        rows = connection.execute(
-            """
-            SELECT id, document_id, title, text, section_index, start_char, end_char
-            FROM parent_sections
-            ORDER BY document_id, section_index, id
-            """
-        ).fetchall()
-    return [_parent_section_from_row(row) for row in rows]
-
-
-def list_evidence_spans(db_path: str | Path) -> list[EvidenceSpan]:
-    """Return every stored evidence span in stable source order."""
-    database_path = Path(db_path)
-    if not database_path.exists():
-        return []
-
-    with _connect(database_path) as connection:
-        _ensure_schema(connection)
-        rows = connection.execute(
-            """
-            SELECT id, document_id, parent_section_id, chunk_id, text,
-                   span_index, start_char, end_char
-            FROM evidence_spans
-            ORDER BY document_id, parent_section_id, span_index, id
-            """
-        ).fetchall()
-    return [_evidence_span_from_row(row) for row in rows]
-
-
 def list_chunk_embeddings(
     db_path: str | Path,
     *,
@@ -379,32 +254,6 @@ def clear_chunks(db_path: str | Path) -> int:
         connection.execute("DELETE FROM chunks")
         connection.execute("DELETE FROM chunk_embeddings")
     return count
-
-
-def clear_evidence(db_path: str | Path) -> dict[str, int]:
-    """Delete hierarchical evidence rows and return removed row counts."""
-    database_path = Path(db_path)
-    if not database_path.exists():
-        return {"parent_sections": 0, "chunks": 0, "evidence_spans": 0}
-
-    with _connect(database_path) as connection:
-        _ensure_schema(connection)
-        section_count = connection.execute(
-            "SELECT COUNT(*) FROM parent_sections"
-        ).fetchone()[0]
-        chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        span_count = connection.execute(
-            "SELECT COUNT(*) FROM evidence_spans"
-        ).fetchone()[0]
-        connection.execute("DELETE FROM evidence_spans")
-        connection.execute("DELETE FROM chunk_embeddings")
-        connection.execute("DELETE FROM chunks")
-        connection.execute("DELETE FROM parent_sections")
-    return {
-        "parent_sections": section_count,
-        "chunks": chunk_count,
-        "evidence_spans": span_count,
-    }
 
 
 def clear_chunk_embeddings(
@@ -501,26 +350,6 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS evidence_spans (
-            id TEXT PRIMARY KEY,
-            document_id TEXT NOT NULL,
-            parent_section_id TEXT NOT NULL,
-            chunk_id TEXT NOT NULL,
-            text TEXT NOT NULL,
-            span_index INTEGER NOT NULL,
-            start_char INTEGER,
-            end_char INTEGER,
-            imported_at TEXT NOT NULL,
-            FOREIGN KEY (document_id) REFERENCES documents (id),
-            FOREIGN KEY (parent_section_id) REFERENCES parent_sections (id),
-            FOREIGN KEY (chunk_id) REFERENCES chunks (id)
-        )
-        """
-    )
-
-
 def _ensure_column(
     connection: sqlite3.Connection,
     table_name: str,
@@ -565,31 +394,6 @@ def _chunk_from_row(row: sqlite3.Row | tuple[str, ...]) -> Chunk:
         start_char=row[4],
         end_char=row[5],
         parent_section_id=row[6],
-    )
-
-
-def _parent_section_from_row(row: sqlite3.Row | tuple[str, ...]) -> ParentSection:
-    return ParentSection(
-        id=row[0],
-        document_id=row[1],
-        title=row[2],
-        text=row[3],
-        section_index=row[4],
-        start_char=row[5],
-        end_char=row[6],
-    )
-
-
-def _evidence_span_from_row(row: sqlite3.Row | tuple[str, ...]) -> EvidenceSpan:
-    return EvidenceSpan(
-        id=row[0],
-        document_id=row[1],
-        parent_section_id=row[2],
-        chunk_id=row[3],
-        text=row[4],
-        span_index=row[5],
-        start_char=row[6],
-        end_char=row[7],
     )
 
 

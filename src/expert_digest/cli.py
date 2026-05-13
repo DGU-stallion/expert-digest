@@ -10,6 +10,9 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
+import time
+from datetime import datetime
+
 from expert_digest import __version__
 from expert_digest.generation.llm_client import AnthropicCompatibleClient
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
@@ -32,27 +35,20 @@ from expert_digest.processing.embedder import (
     embed_chunks,
     embed_text,
 )
-from expert_digest.processing.evidence_builder import build_document_evidence
 from expert_digest.processing.splitter import split_documents
 from expert_digest.retrieval.retriever import rank_chunk_embeddings
 from expert_digest.storage.sqlite_store import (
     DEFAULT_DATABASE_PATH,
-    clear_chunk_embeddings,
     clear_chunks,
-    clear_evidence,
     get_documents_by_author,
     list_chunk_embeddings,
     list_chunks,
     list_documents,
-    list_evidence_spans,
-    list_parent_sections,
     save_chunk_embeddings,
     save_chunks,
     save_documents,
-    save_evidence_spans,
-    save_parent_sections,
 )
-from expert_digest.wiki.analyzer import analyze_document_evidence
+from expert_digest.wiki.analyzer import analyze_document
 from expert_digest.wiki.evaluator import evaluate_wiki
 from expert_digest.wiki.linter import lint_wiki
 from expert_digest.wiki.retriever import search_wiki
@@ -169,38 +165,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"score={item.score:.4f}\t{title}\t{snippet}")
         return 0
 
-    if args.command == "build-evidence":
-        documents = list_documents(args.db)
-        removed = (
-            clear_evidence(args.db)
-            if args.rebuild
-            else {"parent_sections": 0, "chunks": 0, "evidence_spans": 0}
-        )
-        all_sections = []
-        all_chunks = []
-        all_spans = []
-        for document in documents:
-            evidence = build_document_evidence(
-                clean_document(document),
-                parent_max_chars=args.parent_max_chars,
-                child_max_chars=args.child_max_chars,
-                child_min_chars=args.child_min_chars,
-                span_max_chars=args.span_max_chars,
-            )
-            all_sections.extend(evidence.parent_sections)
-            all_chunks.extend(evidence.chunks)
-            all_spans.extend(evidence.evidence_spans)
-        save_parent_sections(args.db, all_sections)
-        save_chunks(args.db, all_chunks)
-        save_evidence_spans(args.db, all_spans)
-        print(
-            "Built evidence: "
-            f"documents={len(documents)} sections={len(all_sections)} "
-            f"chunks={len(all_chunks)} spans={len(all_spans)} "
-            f"cleared={removed}"
-        )
-        return 0
-
     if args.command == "build-wiki":
         vault = WikiVault(root=args.wiki_root)
         vault.initialize(
@@ -209,34 +173,39 @@ def main(argv: Sequence[str] | None = None) -> int:
             purpose=args.purpose,
         )
         documents = list_documents(args.db)
-        sections = list_parent_sections(args.db)
-        spans = list_evidence_spans(args.db)
-        chunks = list_chunks(args.db)
-        sections_by_document = {}
-        for section in sections:
-            sections_by_document.setdefault(section.document_id, []).append(section)
-        chunks_by_document = {}
-        for chunk in chunks:
-            chunks_by_document.setdefault(chunk.document_id, []).append(chunk)
-        spans_by_document = {}
-        for span in spans:
-            spans_by_document.setdefault(span.document_id, []).append(span)
+        total = len(documents)
+        start = time.time()
+        print(f"[{datetime.now():%H:%M:%S}] Building wiki for {total} sources ...")
+        print(f"  Vault root: {args.wiki_root}")
+        print()
         written_sources = 0
-        for document in documents:
-            evidence = _document_evidence_from_store(
-                document=document,
-                sections=sections_by_document.get(document.id, []),
-                chunks=chunks_by_document.get(document.id, []),
-                spans=spans_by_document.get(document.id, []),
-            )
-            analysis = analyze_document_evidence(evidence)
+        for index, document in enumerate(documents, start=1):
+            doc_dict = {
+                "id": document.id,
+                "title": document.title,
+                "content": document.content or "",
+                "author": document.author,
+                "url": document.url,
+            }
+            analysis = analyze_document(doc_dict)
             write_analysis_to_vault(
                 vault=vault,
                 analysis=analysis,
-                evidence_spans=evidence.evidence_spans,
             )
             written_sources += 1
-        print(f"Built wiki: sources={written_sources} root={args.wiki_root}")
+            elapsed = time.time() - start
+            eta = (elapsed / index) * (total - index) if index > 0 else 0
+            _print_text_safely(
+                f"  [{elapsed:7.1f}s] ({index}/{total}) "
+                f"{document.title[:50]}  ~{eta:.0f}s left"
+            )
+        total_elapsed = time.time() - start
+        _print_text_safely("")
+        _print_text_safely(
+            f"[{datetime.now():%H:%M:%S}] Built wiki: "
+            f"sources={written_sources} in {total_elapsed:.0f}s "
+            f"root={args.wiki_root}"
+        )
         return 0
 
     if args.command == "search-wiki":
@@ -335,7 +304,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         pipeline = compile_pipeline()
         try:
-            result = pipeline.invoke(state)
+            result = _run_pipeline_with_progress(
+                state=state, pipeline=pipeline, label="handbook"
+            )
         except (RuntimeError, ValueError) as error:
             print(f"Failed to generate handbook: {error}")
             return 1
@@ -363,7 +334,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         pipeline = compile_pipeline()
         try:
-            result = pipeline.invoke(state)
+            result = _run_pipeline_with_progress(
+                state=state, pipeline=pipeline, label="skill"
+            )
         except RuntimeError as error:
             print(f"Failed to generate SKILL: {error}")
             return 1
@@ -383,6 +356,56 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.print_help()
     return 0
+
+
+def _run_pipeline_with_progress(
+    *,
+    state: dict,
+    pipeline: object,
+    label: str,
+) -> dict:
+    """Run the pipeline with per-node progress printed to stdout.
+
+    Uses ``stream()`` to emit a line per executed node with elapsed time,
+    giving the user visibility into long-running handbook/skill generation.
+    """
+    _STAGE_LABELS = {
+        "entry": "load data",
+        "cluster_content": "topic clustering",
+        "analyze_content": "content analysis (LLM)",
+        "analyze_expression": "expression analysis (LLM)",
+        "assess_quality": "quality check",
+        "route_to_products": "route",
+        "handbook_pipeline": "handbook generation (LLM)",
+        "skill_pipeline": "skill generation (LLM)",
+        "output_handbook": "save handbook",
+        "output_skill": "save skill",
+    }  # fmt: skip
+
+    start = time.time()
+    print(f"[{datetime.now():%H:%M:%S}] Starting {label}...")
+    print(
+        "  Stages: load  cluster  analyze(LLM)  express(LLM)  "
+        "quality  handbook(LLM)  skill(LLM)"
+    )
+    print()
+
+    result = dict(state)
+    try:
+        for event in pipeline.stream(state):
+            for node_name, output in event.items():
+                elapsed = time.time() - start
+                stage = _STAGE_LABELS.get(node_name, node_name)
+                print(f"  [{elapsed:7.1f}s] {stage}")
+                if isinstance(output, dict):
+                    result.update(output)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[{time.time() - start:7.1f}s] FAILED: {exc}")
+        raise
+
+    total = time.time() - start
+    print(f"\n[{datetime.now():%H:%M:%S}] {label} done ({total:.0f}s total)")
+    return result
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -429,14 +452,6 @@ def _build_parser() -> argparse.ArgumentParser:
     search_chunks.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
     search_chunks.add_argument("--model", default=DEFAULT_EMBEDDING_MODEL)
     search_chunks.add_argument("--top-k", type=int, default=5)
-
-    evidence_parser = subparsers.add_parser("build-evidence")
-    evidence_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
-    evidence_parser.add_argument("--parent-max-chars", type=int, default=2400)
-    evidence_parser.add_argument("--child-max-chars", type=int, default=700)
-    evidence_parser.add_argument("--child-min-chars", type=int, default=80)
-    evidence_parser.add_argument("--span-max-chars", type=int, default=220)
-    evidence_parser.add_argument("--rebuild", action="store_true")
 
     wiki_parser = subparsers.add_parser("build-wiki")
     wiki_parser.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
@@ -571,23 +586,6 @@ def _load_pipeline_env() -> None:
             "  cp .env.example .env\n"
             "  # then edit .env with your real API keys"
         )
-
-
-def _document_evidence_from_store(
-    *,
-    document,
-    sections,
-    chunks,
-    spans,
-):
-    from expert_digest.processing.evidence_builder import DocumentEvidence
-
-    return DocumentEvidence(
-        document=document,
-        parent_sections=sections,
-        chunks=chunks,
-        evidence_spans=spans,
-    )
 
 
 def _emit_topic_clusters(
