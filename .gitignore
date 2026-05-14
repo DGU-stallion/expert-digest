@@ -28,6 +28,8 @@ data/raw/
 data/processed/
 data/vector_store/
 data/outputs/*
+!data/outputs/handbook.md
+!data/outputs/skill.md
 data/wiki/
 !data/.gitkeep
 !data/sample/
