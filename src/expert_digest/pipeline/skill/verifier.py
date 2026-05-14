@@ -10,6 +10,7 @@ def run_verify_skill(state: DigestState) -> dict:
 
     Returns verification results stored in state for routing.
     """
+    print("  [skill] verify_skill: quality checking...")
     skill_md = state.get("skill_markdown", "").strip()
     models = state.get("mental_models", [])
     boundaries = state.get("honest_boundaries", [])

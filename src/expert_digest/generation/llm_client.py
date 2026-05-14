@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import time
@@ -43,16 +44,19 @@ class AnthropicCompatibleClient:
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
         }
-        response = _post_json(
-            url=url,
-            payload=payload,
-            headers=headers,
-            timeout_seconds=self.timeout_seconds,
-        )
-        text = _extract_text_content(response)
-        if not text:
-            raise ValueError("empty llm text response")
-        return text
+        for attempt in range(1, _MAX_HTTP_RETRY + 1):
+            response = _post_json(
+                url=url,
+                payload=payload,
+                headers=headers,
+                timeout_seconds=self.timeout_seconds,
+            )
+            text = _extract_text_content(response)
+            if text:
+                return text
+            if attempt < _MAX_HTTP_RETRY:
+                time.sleep(min(2**attempt, 10))
+        raise ValueError("empty llm text response")
 
 
 def _extract_text_content(response: dict[str, object]) -> str:
@@ -99,7 +103,13 @@ def _post_json(
                 time.sleep(delay)
                 continue
             raise RuntimeError(f"http_error {error.code}: {body}") from error
-        except (URLError, TimeoutError) as error:
+        except (
+            URLError,
+            TimeoutError,
+            http.client.RemoteDisconnected,
+            ConnectionResetError,
+            OSError,
+        ) as error:
             if attempt < _MAX_HTTP_RETRY:
                 time.sleep(min(2**attempt, 10))
                 continue

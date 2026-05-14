@@ -37,3 +37,4 @@ tmp_pytest_run/
 pytest_tmp_work/
 
 .claude/
+CLAUDE.md

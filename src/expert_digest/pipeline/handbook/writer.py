@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from expert_digest.pipeline.llm import require_reasoning_client
 from expert_digest.pipeline.state import ChapterDraft, ChapterPlan, DigestState
 
@@ -161,8 +164,97 @@ def _gather_context_for_chapter(
     return doc_texts
 
 
+# ── Chapter cache helpers ─────────────────────────────────────────────
+
+_CACHE_DIR = ".handbook_cache"
+
+
+def _cache_dir(state: DigestState) -> Path:
+    """Resolve the chapter cache directory from pipeline state."""
+    output_dir = Path(state.get("output_dir", "data/outputs"))
+    cache = output_dir / _CACHE_DIR
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+def _cache_path(cache: Path, index: int) -> Path:
+    return cache / f"chapter_{index}.json"
+
+
+def _load_chapter_cache(state: DigestState) -> tuple[dict[str, ChapterDraft], dict[str, bool], dict[str, list[str]]]:
+    """Load all cached chapters and their pass/issues state.
+
+    Returns:
+        (chapter_map, passed_map, issues_map)
+        chapter_map: title → ChapterDraft
+        passed_map: title → bool
+        issues_map: title → list[str]
+    """
+    cache_dir = _cache_dir(state)
+    chapters: dict[str, ChapterDraft] = {}
+    passed: dict[str, bool] = {}
+    issues_map: dict[str, list[str]] = {}
+
+    for f in sorted(cache_dir.glob("chapter_*.json"), key=lambda p: int(p.stem.split("_")[1])):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            title = data.get("title", "")
+            content = data.get("content", "")
+            if title and content:
+                chapters[title] = ChapterDraft(
+                    title=title,
+                    content=content,
+                    section_count=data.get("section_count", content.count("\n##")),
+                )
+                passed[title] = data.get("passed", False)
+                issues_map[title] = data.get("issues", [])
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return chapters, passed, issues_map
+
+
+def _save_chapter_cache(state: DigestState, index: int, chapter: ChapterDraft,
+                        passed: bool = False, issues: list[str] | None = None) -> None:
+    """Save a single chapter to disk cache, overwriting any previous entry at same index."""
+    cache = _cache_dir(state)
+    data = {
+        "title": chapter.title,
+        "content": chapter.content,
+        "section_count": chapter.section_count,
+        "passed": passed,
+        "issues": issues or [],
+    }
+    try:
+        _cache_path(cache, index).write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def save_chapter_cache(state: DigestState, index: int, chapter: ChapterDraft) -> None:
+    """Public helper for reviewer to update pass/issues in cache."""
+    cache = _cache_dir(state)
+    path = _cache_path(cache, index)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["passed"] = True
+        data["issues"] = []
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
+# ── Writer ─────────────────────────────────────────────────────────────
+
 def run_draft_chapters(state: DigestState) -> dict:
-    """Draft all chapters with full-document context and cross-chapter awareness."""
+    """Draft or rewrite chapters with incremental disk cache.
+
+    On first run: generate all chapters, saving each to disk immediately.
+    On restart: load cached chapters, only generate missing or unpassed ones.
+    On rewrite: only regenerate chapters with review feedback.
+    """
     chapter_plan = state.get("chapter_plan", [])
     review_results = state.get("review_results", [])
 
@@ -174,13 +266,56 @@ def run_draft_chapters(state: DigestState) -> dict:
         if rr.issues:
             feedback_map[rr.chapter_title] = rr.issues
 
+    # Load disk cache — allows recovery after interrupted runs
+    cached_chapters, passed_map, issues_map = _load_chapter_cache(state)
+    is_restart = len(cached_chapters) > 0
+    is_rewrite = len(review_results) > 0
+
+    if is_restart and not is_rewrite:
+        print(f"  [handbook] draft_chapters: {len(cached_chapters)}/{len(chapter_plan)} in cache, resuming...")
+    elif is_rewrite:
+        need = [p.title for p in chapter_plan if p.title in feedback_map]
+        print(f"  [handbook] rewrite_chapters: {len(need)}/{len(chapter_plan)} need rewrite: {', '.join(need)}")
+
     llm = require_reasoning_client()
     chapters: list[ChapterDraft] = []
     previous_chapters: list[str] = []
 
-    for plan in chapter_plan:
-        context_texts = _gather_context_for_chapter(plan, state)
+    for i, plan in enumerate(chapter_plan, 1):
         feedback = feedback_map.get(plan.title, None)
+        idx = i - 1  # 0-based index for cache
+
+        # Decision: do we need to generate this chapter?
+        cached = cached_chapters.get(plan.title)
+
+        # Generate if: (a) not in cache, OR (b) has pending feedback, OR (c) didn't pass
+        needs_generation = False
+        skip_reason = None
+
+        if cached is None:
+            needs_generation = True
+        elif plan.title in feedback_map:
+            needs_generation = True
+            skip_reason = "feedback"
+        elif not passed_map.get(plan.title, False):
+            needs_generation = True
+            skip_reason = "not passed"
+
+        if not needs_generation:
+            chapters.append(cached)
+            previous_chapters.append(f"{plan.title}：{plan.purpose}")
+            if is_rewrite:
+                print(f"  [handbook]   keep    {i}/{len(chapter_plan)}: {plan.title}")
+            continue
+
+        if is_rewrite:
+            print(f"  [handbook]   rewrite {i}/{len(chapter_plan)}: {plan.title}")
+        elif skip_reason == "not passed":
+            print(f"  [handbook]   resume  {i}/{len(chapter_plan)}: {plan.title}")
+        else:
+            print(f"  [handbook]   draft   {i}/{len(chapter_plan)}: {plan.title}")
+
+        context_texts = _gather_context_for_chapter(plan, state)
         user_prompt = _build_writer_prompt(
             plan, context_texts, list(previous_chapters), feedback
         )
@@ -191,13 +326,15 @@ def run_draft_chapters(state: DigestState) -> dict:
 
         content = raw.strip()
         section_count = content.count("\n##")
-        chapters.append(
-            ChapterDraft(
-                title=plan.title,
-                content=content,
-                section_count=section_count,
-            )
+        chapter = ChapterDraft(
+            title=plan.title,
+            content=content,
+            section_count=section_count,
         )
+        chapters.append(chapter)
         previous_chapters.append(f"{plan.title}：{plan.purpose}")
+
+        # Persist immediately after generation
+        _save_chapter_cache(state, idx, chapter)
 
     return {"chapters": chapters}

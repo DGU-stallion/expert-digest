@@ -25,7 +25,7 @@ from expert_digest.knowledge.topic_clusterer import (
     build_topic_clusters,
 )
 from expert_digest.knowledge.topic_report import build_topic_report
-from expert_digest.pipeline.graph import compile_pipeline
+from expert_digest.pipeline.graph import compile_handbook_pipeline, compile_pipeline, compile_skill_pipeline
 from expert_digest.pipeline.llm import require_fast_client
 from expert_digest.pipeline.state import make_initial_state
 from expert_digest.processing.cleaner import clean_document
@@ -48,6 +48,8 @@ from expert_digest.storage.sqlite_store import (
     save_chunks,
     save_documents,
 )
+from pathlib import Path
+
 from expert_digest.wiki.analyzer import analyze_document
 from expert_digest.wiki.evaluator import evaluate_wiki
 from expert_digest.wiki.linter import lint_wiki
@@ -179,7 +181,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  Vault root: {args.wiki_root}")
         print()
         written_sources = 0
+        skipped = 0
         for index, document in enumerate(documents, start=1):
+            source_path = Path(args.wiki_root) / "sources" / f"{document.id}.md"
+            if source_path.exists():
+                skipped += 1
+                continue
             doc_dict = {
                 "id": document.id,
                 "title": document.title,
@@ -203,7 +210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_text_safely("")
         _print_text_safely(
             f"[{datetime.now():%H:%M:%S}] Built wiki: "
-            f"sources={written_sources} in {total_elapsed:.0f}s "
+            f"sources={written_sources} (skipped={skipped}) in {total_elapsed:.0f}s "
             f"root={args.wiki_root}"
         )
         return 0
@@ -302,7 +309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             author=args.author or "",
             output_dir=str(args.output.parent) if args.output else "data/outputs",
         )
-        pipeline = compile_pipeline()
+        pipeline = compile_handbook_pipeline()
         try:
             result = _run_pipeline_with_progress(
                 state=state, pipeline=pipeline, label="handbook"
@@ -332,7 +339,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             author=args.author or "",
             output_dir=str(args.output.parent) if args.output else "data/outputs",
         )
-        pipeline = compile_pipeline()
+        pipeline = compile_skill_pipeline()
         try:
             result = _run_pipeline_with_progress(
                 state=state, pipeline=pipeline, label="skill"

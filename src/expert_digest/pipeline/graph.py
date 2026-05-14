@@ -19,38 +19,14 @@ from expert_digest.pipeline.skill.graph import build_skill_subgraph
 from expert_digest.pipeline.state import DigestState, PipelineError
 
 
-def build_main_graph() -> StateGraph:
-    """Build the full pipeline graph.
-
-    Graph structure:
-      entry → analyze_content → analyze_expression → assess_quality
-        → (retry) → analyze_content (loop)
-        → (proceed) → handbook subgraph + skill subgraph (parallel)
-    """
-    builder = StateGraph(DigestState)
-
-    # ── Analysis nodes ──
+def _add_analysis_nodes(builder: StateGraph, route_node_name: str) -> None:
+    """Add shared analysis nodes to the graph builder."""
     builder.add_node("entry", run_load_data)
     builder.add_node("cluster_content", run_cluster_content)
     builder.add_node("analyze_content", run_analyze_content)
     builder.add_node("analyze_expression", run_analyze_expression)
     builder.add_node("assess_quality", run_assess_quality)
 
-    # ── Subgraphs (compiled) ──
-    hb_subgraph = build_handbook_subgraph().compile()
-    builder.add_node("handbook_pipeline", hb_subgraph)
-
-    sk_subgraph = build_skill_subgraph().compile()
-    builder.add_node("skill_pipeline", sk_subgraph)
-
-    # ── Output nodes ──
-    builder.add_node("output_handbook", _output_handbook)
-    builder.add_node("output_skill", _output_skill)
-
-    # ── Fan-out router ──
-    builder.add_node("route_to_products", _route_to_products)
-
-    # ── Edges ──
     builder.set_entry_point("entry")
     builder.add_edge("entry", "cluster_content")
     builder.add_edge("cluster_content", "analyze_content")
@@ -59,10 +35,86 @@ def build_main_graph() -> StateGraph:
     builder.add_conditional_edges(
         "assess_quality",
         should_retry_analysis,
-        {"retry": "analyze_content", "proceed": "route_to_products"},
+        {"retry": "analyze_content", "proceed": route_node_name},
     )
 
-    # Sequential: handbook → skill (avoid parallel LastValue writes to shared state).
+
+def _always_route_handbook(state: DigestState) -> str:
+    """Router that always routes to handbook_pipeline."""
+    return "handbook_pipeline"
+
+
+def _always_route_skill(state: DigestState) -> str:
+    """Router that always routes to skill_pipeline."""
+    return "skill_pipeline"
+
+
+def build_handbook_only_graph() -> StateGraph:
+    """Build a handbook-only pipeline graph.
+
+    Skips skill generation entirely to save time.
+    """
+    builder = StateGraph(DigestState)
+    _add_analysis_nodes(builder, "_route_to_output")
+
+    hb_subgraph = build_handbook_subgraph().compile()
+    builder.add_node("handbook_pipeline", hb_subgraph)
+    builder.add_node("output_handbook", _output_handbook)
+
+    # Single route: analysis → handbook → output
+    builder.add_node("_route_to_output", _route_to_products)
+    builder.add_conditional_edges(
+        "_route_to_output",
+        _always_route_handbook,
+        {"handbook_pipeline": "handbook_pipeline"},
+    )
+    builder.add_edge("handbook_pipeline", "output_handbook")
+    builder.add_edge("output_handbook", END)
+
+    return builder
+
+
+def build_skill_only_graph() -> StateGraph:
+    """Build a skill-only pipeline graph.
+
+    Skips handbook generation entirely to save time.
+    """
+    builder = StateGraph(DigestState)
+    _add_analysis_nodes(builder, "_route_to_output")
+
+    sk_subgraph = build_skill_subgraph().compile()
+    builder.add_node("skill_pipeline", sk_subgraph)
+    builder.add_node("output_skill", _output_skill)
+
+    # Single route: analysis → skill → output
+    builder.add_node("_route_to_output", _route_to_products)
+    builder.add_conditional_edges(
+        "_route_to_output",
+        _always_route_skill,
+        {"skill_pipeline": "skill_pipeline"},
+    )
+    builder.add_edge("skill_pipeline", "output_skill")
+    builder.add_edge("output_skill", END)
+
+    return builder
+
+
+def build_main_graph() -> StateGraph:
+    """Build the full pipeline graph (handbook + skill)."""
+    builder = StateGraph(DigestState)
+    _add_analysis_nodes(builder, "route_to_products")
+
+    hb_subgraph = build_handbook_subgraph().compile()
+    builder.add_node("handbook_pipeline", hb_subgraph)
+
+    sk_subgraph = build_skill_subgraph().compile()
+    builder.add_node("skill_pipeline", sk_subgraph)
+
+    builder.add_node("output_handbook", _output_handbook)
+    builder.add_node("output_skill", _output_skill)
+    builder.add_node("route_to_products", _route_to_products)
+
+    # Sequential: handbook → skill (avoid parallel LastValue writes).
     builder.add_edge("route_to_products", "handbook_pipeline")
     builder.add_edge("handbook_pipeline", "skill_pipeline")
     builder.add_edge("skill_pipeline", "output_handbook")
@@ -76,6 +128,18 @@ def build_main_graph() -> StateGraph:
 def compile_pipeline() -> object:
     """Build and compile the full pipeline graph."""
     graph = build_main_graph()
+    return graph.compile()
+
+
+def compile_handbook_pipeline() -> object:
+    """Build and compile a handbook-only pipeline."""
+    graph = build_handbook_only_graph()
+    return graph.compile()
+
+
+def compile_skill_pipeline() -> object:
+    """Build and compile a skill-only pipeline."""
+    graph = build_skill_only_graph()
     return graph.compile()
 
 

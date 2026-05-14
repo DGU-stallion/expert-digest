@@ -7,6 +7,7 @@ from expert_digest.pipeline.state import DigestState
 
 def run_build_skill_md(state: DigestState) -> dict:
     """Assemble final SKILL.md from all extracted components in state."""
+    print("  [skill] build_skill_md: assembling markdown...")
     author = state.get("author", "")
     themes = state.get("themes", [])
 

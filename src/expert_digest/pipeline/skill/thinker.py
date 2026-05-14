@@ -92,6 +92,7 @@ def run_extract_mental_models(state: DigestState) -> dict:
             "honest_boundaries": [],
         }
 
+    print("  [skill] extract_mental_models: LLM analysis extraction...")
     llm = require_reasoning_client()
     user_prompt = _build_thinker_prompt(state)
     raw = llm.generate(

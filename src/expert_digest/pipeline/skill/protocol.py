@@ -49,6 +49,7 @@ def run_design_protocol(state: DigestState) -> dict:
     if not models:
         return {"protocol_steps": ""}
 
+    print("  [skill] design_protocol: LLM agentic protocol design...")
     llm = require_fast_client()
     user_prompt = _build_protocol_prompt(state)
     raw = llm.generate(

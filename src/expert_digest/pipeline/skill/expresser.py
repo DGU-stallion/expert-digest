@@ -72,6 +72,7 @@ def run_encode_expression(state: DigestState) -> dict:
     if dna is None:
         return {"role_rules": ""}
 
+    print("  [skill] encode_expression: LLM style encoding...")
     llm = require_fast_client()
     user_prompt = _build_expresser_prompt(state)
     raw = llm.generate(

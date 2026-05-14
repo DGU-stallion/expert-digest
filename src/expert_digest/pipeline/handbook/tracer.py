@@ -21,6 +21,7 @@ def run_build_trace(state: DigestState) -> dict:
     clusters = state.get("topic_clusters", [])
     documents = state.get("documents", [])
     output_dir = Path(state.get("output_dir", "data/outputs"))
+    print(f"  [handbook] build_trace: writing evidence trace for {len(chapters)} chapters")
 
     plan_map: dict[str, ChapterPlan] = {p.title: p for p in chapter_plan}
     doc_map = {d.get("id", ""): d for d in documents}

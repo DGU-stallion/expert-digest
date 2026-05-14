@@ -202,7 +202,7 @@ def test_cli_generate_handbook_writes_output(monkeypatch, capsys, tmp_path):
             yield {"handbook_pipeline": {"handbook_markdown": "# Handbook\n\nContent here.\n"}}
             yield {"output_handbook": {}}
 
-    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _FakePipeline())
+    monkeypatch.setattr("expert_digest.cli.compile_handbook_pipeline", lambda: _FakePipeline())
 
     output_path = tmp_path / "handbook.md"
     exit_code = main(["generate-handbook", "--output", str(output_path)])
@@ -223,7 +223,7 @@ def test_cli_generate_handbook_returns_error_on_pipeline_failure(
         def stream(self, state):
             raise RuntimeError("pipeline error: no documents")
 
-    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _BrokenPipeline())
+    monkeypatch.setattr("expert_digest.cli.compile_handbook_pipeline", lambda: _BrokenPipeline())
     monkeypatch.setattr("expert_digest.cli._load_pipeline_env", lambda: None)
 
     exit_code = main(["generate-handbook"])
@@ -242,7 +242,7 @@ def test_cli_generate_handbook_output_empty(monkeypatch, capsys, tmp_path):
             yield {"entry": {"documents": []}}
             yield {"handbook_pipeline": {}}
 
-    monkeypatch.setattr("expert_digest.cli.compile_pipeline", lambda: _FakePipeline())
+    monkeypatch.setattr("expert_digest.cli.compile_handbook_pipeline", lambda: _FakePipeline())
     monkeypatch.setattr("expert_digest.cli._load_pipeline_env", lambda: None)
 
     output_path = tmp_path / "handbook.md"

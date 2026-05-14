@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 
+from expert_digest.pipeline.handbook.writer import _save_chapter_cache
 from expert_digest.pipeline.llm import require_fast_client
 from expert_digest.pipeline.state import (
     ChapterDraft,
@@ -59,7 +60,7 @@ def _parse_review(raw: str) -> dict:
 
 
 def run_review_chapters(state: DigestState) -> dict:
-    """Review all drafted chapters for quality and completeness."""
+    """Review drafted chapters — only re-review rewritten ones, keep existing results."""
     chapters = state.get("chapters", [])
     if not chapters:
         return {
@@ -67,11 +68,27 @@ def run_review_chapters(state: DigestState) -> dict:
             "errors": [PipelineError(node="reviewer", message="no chapters to review")],
         }
 
+    existing_results = state.get("review_results", [])
+    is_rewrite = len(existing_results) > 0
+
+    # Build map of chapters that were already reviewed and passed
+    passed_map: dict[str, ReviewResult] = {}
+    for rr in existing_results:
+        if rr.passed:
+            passed_map[rr.chapter_title] = rr
+
     llm = require_fast_client()
     all_titles = [c.title for c in chapters]
     results: list[ReviewResult] = []
 
-    for chapter in chapters:
+    for i, chapter in enumerate(chapters, 1):
+        # Skip re-review if this chapter already passed and hasn't been regenerated
+        if is_rewrite and chapter.title in passed_map:
+            results.append(passed_map[chapter.title])
+            print(f"  [handbook]   keep    {i}/{len(chapters)}: {chapter.title} (passed)")
+            continue
+
+        print(f"  [handbook]   review  {i}/{len(chapters)}: {chapter.title}")
         user_prompt = _build_reviewer_prompt(chapter, all_titles)
         raw = llm.generate(
             system_prompt=_REVIEWER_SYSTEM_PROMPT,
@@ -80,14 +97,28 @@ def run_review_chapters(state: DigestState) -> dict:
         parsed = _parse_review(raw)
         issues_raw = parsed.get("issues", [])
         issues = [str(i) for i in issues_raw if isinstance(i, str)] if isinstance(issues_raw, list) else []
+        passed = bool(parsed.get("passed", False))
         results.append(
             ReviewResult(
                 chapter_title=chapter.title,
-                passed=bool(parsed.get("passed", False)),
+                passed=passed,
                 issues=issues,
             )
         )
 
+        # Persist review result to cache immediately
+        idx = i - 1
+        chapter_draft = next(
+            (c for c in chapters if c.title == chapter.title), None
+        )
+        if chapter_draft is not None:
+            _save_chapter_cache(state, idx, chapter_draft, passed=passed, issues=issues)
+
+    failed = [r.chapter_title for r in results if not r.passed]
+    if failed:
+        print(f"  [handbook] review_chapters: {len(failed)} need rewrite: {', '.join(failed[:3])}")
+    else:
+        print(f"  [handbook] review_chapters: all {len(results)} passed")
     return {"review_results": results}
 
 

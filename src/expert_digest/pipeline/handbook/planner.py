@@ -71,6 +71,7 @@ def run_plan_chapters(state: DigestState) -> dict:
     if not themes:
         return {"chapter_plan": []}
 
+    print("  [handbook] plan_chapters: LLM outline generation...")
     llm = require_reasoning_client()
     user_prompt = _build_planner_prompt(state)
     raw = llm.generate(
@@ -79,6 +80,7 @@ def run_plan_chapters(state: DigestState) -> dict:
     )
 
     plans = _parse_chapter_plan(raw)
+    print(f"  [handbook] plan_chapters: {len(plans)} chapters planned")
     return {"chapter_plan": plans}
 
 

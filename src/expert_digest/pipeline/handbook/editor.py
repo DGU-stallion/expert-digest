@@ -81,6 +81,7 @@ def run_coherence_pass(state: DigestState) -> dict:
     if not chapters:
         return {"handbook_markdown": ""}
 
+    print(f"  [handbook] coherence_pass: 3-stage global editing for {len(chapters)} chapters")
     author = state.get("author", "作者")
     chapter_dicts = [
         {"title": c.title, "content": c.content} for c in chapters
@@ -88,13 +89,13 @@ def run_coherence_pass(state: DigestState) -> dict:
 
     raw = _assemble_raw(chapter_dicts, author)
 
-    # Stage 1: Deduplicate + unify terminology
+    print("  [handbook]   stage 1/3: dedup + unify terminology")
     raw = _edit_pass(raw, _DEDUP_SYSTEM_PROMPT, "dedup")
 
-    # Stage 2: Fix logical flow + reorder sections
+    print("  [handbook]   stage 2/3: logical flow optimization")
     raw = _edit_pass(raw, _FLOW_SYSTEM_PROMPT, "flow")
 
-    # Stage 3: Add introduction, transitions, conclusion, polish
+    print("  [handbook]   stage 3/3: polish + intro/outro")
     raw = _edit_pass(raw, _POLISH_SYSTEM_PROMPT, "polish")
 
     return {"handbook_markdown": raw}
