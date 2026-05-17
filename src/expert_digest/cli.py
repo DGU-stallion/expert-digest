@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -16,6 +17,7 @@ from datetime import datetime
 from expert_digest import __version__
 from expert_digest.generation.llm_client import AnthropicCompatibleClient
 from expert_digest.ingest.jsonl_loader import load_jsonl_documents
+from expert_digest.ingest.loader import list_platforms, load_crawler_documents
 from expert_digest.ingest.markdown_loader import load_markdown_documents
 from expert_digest.ingest.zhihu_loader import load_zhihu_documents
 from expert_digest.knowledge.topic_clusterer import (
@@ -48,14 +50,64 @@ from expert_digest.storage.sqlite_store import (
     save_chunks,
     save_documents,
 )
-from pathlib import Path
-
 from expert_digest.wiki.analyzer import analyze_document
 from expert_digest.wiki.evaluator import evaluate_wiki
 from expert_digest.wiki.linter import lint_wiki
 from expert_digest.wiki.retriever import search_wiki
 from expert_digest.wiki.vault import WikiVault
 from expert_digest.wiki.writer import write_analysis_to_vault
+
+
+def _cmd_ingest_agent_data(args: argparse.Namespace) -> None:
+    """Ingest agent-crawled data: run Node normalizer then import to SQLite."""
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    script = _PROJECT_ROOT / "crawlers" / args.platform / "src" / "agent-crawl.js"
+
+    if not script.exists():
+        print(
+            f"Error: agent-crawl.js not found for platform '{args.platform}' "
+            f"(expected at {script})"
+        )
+        sys.exit(1)
+
+    print(f"[{time.strftime('%H:%M:%S')}] Processing raw data via {script.name}...")
+
+    node_cmd = [
+        "node",
+        str(script),
+        "--user-token", args.user_token,
+        "--output-dir", str(args.output_dir),
+        "--profile-file", str(args.profile_file),
+        "--answers-file", str(args.answers_file),
+        "--articles-file", str(args.articles_file),
+    ]
+    if args.markdown:
+        node_cmd.append("--markdown")
+
+    result = subprocess.run(node_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"agent-crawl.js failed (exit {result.returncode}):")
+        print(result.stderr)
+        sys.exit(1)
+
+    agent_result = json.loads(result.stdout.strip())
+    output_root = Path(agent_result["outputRoot"])
+    print(
+        f"  Normalized {agent_result['totalItems']} item(s) -> {output_root}"
+    )
+
+    # Auto-run import-crawler
+    print(f"[{time.strftime('%H:%M:%S')}] Importing into SQLite...")
+    import_result = subprocess.run(
+        [sys.executable, "-m", "expert_digest", "import-crawler",
+         args.platform, str(output_root), "--db", str(args.db)],
+        capture_output=True, text=True,
+    )
+    if import_result.returncode != 0:
+        print(f"import-crawler failed (exit {import_result.returncode}):")
+        print(import_result.stderr)
+        sys.exit(1)
+    print(import_result.stdout.strip())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -80,6 +132,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         documents = load_zhihu_documents(args.path)
         count = save_documents(args.db, documents)
         print(f"Imported {count} document(s) into {args.db}")
+        return 0
+
+    if args.command == "import-crawler":
+        documents = load_crawler_documents(args.platform, args.path)
+        count = save_documents(args.db, documents)
+        print(
+            f"[{args.platform}] Imported {count} document(s) "
+            f"into {args.db}"
+        )
+        return 0
+
+    if args.command == "ingest-agent-data":
+        _cmd_ingest_agent_data(args)
         return 0
 
     if args.command == "build-chunks":
@@ -433,6 +498,32 @@ def _build_parser() -> argparse.ArgumentParser:
     import_zhihu = subparsers.add_parser("import-zhihu")
     import_zhihu.add_argument("path", type=Path)
     import_zhihu.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+
+    import_crawler = subparsers.add_parser("import-crawler")
+    import_crawler.add_argument(
+        "platform",
+        choices=sorted(list_platforms()),
+        help="Platform identifier (use import-crawler --list-platforms for available)",
+    )
+    import_crawler.add_argument("path", type=Path)
+    import_crawler.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+
+    ingest_agent = subparsers.add_parser(
+        "ingest-agent-data",
+        help="Process agent-crawled data and import to SQLite",
+    )
+    ingest_agent.add_argument("platform", help="Platform identifier (e.g. zhihu)")
+    ingest_agent.add_argument("--user-token", required=True)
+    ingest_agent.add_argument("--profile-file", type=Path, required=True)
+    ingest_agent.add_argument("--answers-file", type=Path, required=True)
+    ingest_agent.add_argument("--articles-file", type=Path, required=True)
+    ingest_agent.add_argument(
+        "--output-dir", type=Path, default=Path("data/crawlers")
+    )
+    ingest_agent.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)
+    ingest_agent.add_argument(
+        "--markdown", action="store_true", help="Enable markdown content generation"
+    )
 
     build_chunks = subparsers.add_parser("build-chunks")
     build_chunks.add_argument("--db", type=Path, default=DEFAULT_DATABASE_PATH)

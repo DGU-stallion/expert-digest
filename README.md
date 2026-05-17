@@ -26,7 +26,27 @@ python -m venv .venv
 python -m pip install -e ".[dev,pipeline]"
 ```
 
-### 2. 准备数据
+### 2. 爬虫抓取（可选）
+
+从知乎等平台抓取专家数据，自动导入 SQLite。
+
+**前置条件**：
+1. Chrome 浏览器已登录目标平台（如 [zhihu.com](https://www.zhihu.com)）
+2. 安装 Playwright MCP Bridge 扩展
+
+Agent 驱动的一步式命令：
+
+```powershell
+expert-digest ingest-agent-data zhihu `
+  --user-token huang-wei-yan-30 `
+  --profile-file tmp/profile.json `
+  --answers-file tmp/answers.json `
+  --articles-file tmp/articles.json
+```
+
+Agent 会通过 Playwright 浏览器工具获取数据后执行此命令，自动完成规范化 + 导入。详细流程见 `.claude/CLAUDE.md` 的「爬虫工作流」章节。
+
+### 3. 准备数据（手动导入）
 
 三种导入格式（任选其一）：
 
@@ -41,7 +61,7 @@ expert-digest import-markdown path/to/markdown/ --db data/processed/db.sqlite3
 expert-digest import-zhihu path/to/zhihu-export --db data/processed/db.sqlite3
 ```
 
-### 3. 构建索引
+### 4. 构建索引
 
 ```powershell
 # 分块 + 向量化
@@ -52,7 +72,7 @@ expert-digest build-embeddings --db data/processed/db.sqlite3
 expert-digest build-wiki --db data/processed/db.sqlite3 --wiki-root data/wiki/default
 ```
 
-### 4. 知识蒸馏
+### 5. 知识蒸馏
 
 ```powershell
 # 生成学习手册（~5-10分钟，LLM 驱动）
@@ -62,7 +82,7 @@ expert-digest generate-handbook --db data/processed/db.sqlite3 --author 作者�
 expert-digest generate-skill --db data/processed/db.sqlite3 --author 作者名
 ```
 
-### 5. 在 Claude Code 中使用
+### 6. 在 Claude Code 中使用
 
 ```powershell
 # 将输出文件加入 Claude 的 memory
@@ -207,6 +227,10 @@ expert-digest/
 │       ├── nodes/                      # 分析节点
 │       ├── handbook/                   # Handbook 子图
 │       └── skill/                      # SKILL 子图
+│
+├── crawlers/                           # 平台爬虫模块
+│   ├── zhihu/                          # 知乎爬虫（Agent 驱动）
+│   └── shared/schema.md                # 爬虫输出规范
 │
 ├── tests/                              # pytest 测试套件
 ├── configs/                            # 配置文件

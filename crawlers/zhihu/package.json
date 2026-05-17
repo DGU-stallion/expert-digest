@@ -1,0 +1,11 @@
+{
+  "name": "zhihu-crawler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "agent-crawl": "node src/agent-crawl.js",
+    "test": "node --test --test-isolation=none tests/*.test.js"
+  },
+  "dependencies": {}
+}

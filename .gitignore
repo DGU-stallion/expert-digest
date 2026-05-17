@@ -30,6 +30,7 @@ data/vector_store/
 data/outputs/*
 !data/outputs/handbook.md
 !data/outputs/skill.md
+data/crawlers/
 data/wiki/
 !data/.gitkeep
 !data/sample/
@@ -37,6 +38,8 @@ data/wiki/
 
 tmp_pytest_run/
 pytest_tmp_work/
+
+.playwright-mcp/
 
 .claude/
 CLAUDE.md

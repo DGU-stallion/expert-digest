@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from expert_digest.domain.models import Document
+from expert_digest.ingest.loader import CrawlerLoader, register_loader
 
 REQUIRED_FIELDS = ("source_type", "source_id", "author_name", "title")
 
@@ -90,3 +91,13 @@ def _optional_string(value: object) -> str | None:
         return None
     stripped = str(value).strip()
     return stripped if stripped else None
+
+
+@register_loader
+class ZhihuLoader(CrawlerLoader):
+    """CrawlerLoader implementation for Zhihu (知乎) platform."""
+
+    platform = "zhihu"
+
+    def load(self, path: str | Path) -> list[Document]:
+        return load_zhihu_documents(path)
